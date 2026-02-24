@@ -1,0 +1,15 @@
+.env
+venv/
+test.xlsx
+modified_test.xlsx
+~$modified_test.xlsx
+~$test.xlsx
+*.xlsx
+~$test.xlsx
+dist/
+build/
+.vscode/
+.claude/
+__pycache__/
+build/main/
+*.log
