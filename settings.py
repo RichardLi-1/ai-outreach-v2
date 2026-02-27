@@ -23,5 +23,7 @@ class Settings(BaseSettings):
     max_tokens: int
     initial_prompt_mayor: str
     initial_prompt_assessor: str
+    prompt_format_gis: str
+    prompt_format_assessor: str
     model_config = ConfigDict(env_file=get_env_path())
 settings = Settings()

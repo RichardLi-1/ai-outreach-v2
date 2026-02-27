@@ -821,6 +821,10 @@ class App:
                         non_null = non_null[non_null.astype(str).str.strip() != ""]
                         if not non_null.empty:
                             state_val = str(non_null.iloc[0]).strip()
+                            _sm = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
+                            _normalized = _sm.get(state_val.lower(), state_val)
+                            if " – " in _normalized:
+                                state_val = _normalized.split(" – ")[0].strip()
 
                     userChoices = self.sheet_role_choices.get(sheet_name)
                     if userChoices is None:
@@ -980,7 +984,10 @@ class App:
                                     reFind = False
                                     email_val = parsedInfo.get("email")
                                     email_type = parsedInfo.get("emailType")
-                                    verifyNeeded = bool(email_val) and email_type == "person" and email_val != "None" and "*" not in email_val and "protected" not in email_val
+                                    incompleteEmailArtifacts = ["*", "protected", "info@", "contact@", "gis@", "assessor@", "pa@", "ecta@", "administration", "admin@", "office@"]
+                                    if email_val and isinstance(email_val, str):
+                                        reFind = any([c in email_val.lower() for c in incompleteEmailArtifacts]) or email_val.lower() == "none" or email_type != "person"
+                                    verifyNeeded = bool(email_val) and email_type == "person" and email_val != "None" and not reFind
                                     #Verify personal emails found
                                     if verifyNeeded:
                                         try:
@@ -1018,8 +1025,6 @@ class App:
                                             self.logger.warning(f"Hunter.io verify_email API error (skipping): {str(e)}")
                                             # Continue processing without verification
 
-                                    if "protected" in email_val or "*" in email_val:
-                                        reFind = True
                                     #Search for personal email if department email or no email was returned
                                     first_name = parsedInfo.get("firstName")
                                     last_name = parsedInfo.get("lastName")
@@ -1056,7 +1061,7 @@ class App:
                                                             if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
                                                                 df.loc[idx, self.column_for["Phone Number"]] = number
                                                         elif score>=70:
-                                                            self.logger.info(f"Email saving hunter.io email {email} to Alternative Email column")
+                                                            self.logger.info(f"Saving hunter.io email {email} to Alternative Email column")
                                                             df.loc[idx, "Alternative Email"] = email
                                                             df.loc[idx, "Alternative Email Confidence"] = str(score)
                                                             df.loc[idx, "Hunter Email Source"] = source

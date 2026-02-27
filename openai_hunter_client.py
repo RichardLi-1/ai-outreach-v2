@@ -13,9 +13,14 @@ def search(prompt: str, role: Role, system_prompt: str) -> str:
     logger.info(f"Calling OpenAI to search for {role} in {prompt}")
     message=[]
 
-    message=[{"role": "system", 
-                    "content": system_prompt}]
-    
+    if role == Role.ASSESSOR:
+        message=[{"role": "system", 
+                    "content": system_prompt + settings.prompt_format_assessor}]
+    else:
+        message=[{"role": "system", 
+                    "content": system_prompt + settings.prompt_format_gis}]
+
+
     message.append({
         "role": "user",
         "content": prompt
