@@ -16,6 +16,28 @@ import sv_ttk
 from tkinter import messagebox, filedialog, scrolledtext, ttk
 import logging
 from pathlib import Path
+from langchain.agents import create_agent
+from alberta_tools import lookup_county, query_rag, web_search_gis
+
+os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+
+class GISContact(openai.BaseModel):
+    firstName: str
+    lastName: str
+    email: str
+    phoneNumber: str
+    role: str
+    govWebsite: str
+    confidence: float
+
+
+graph = create_agent(
+    model="openai:gpt-4o-mini",
+    tools=[lookup_county, query_rag, web_search_gis],
+    system_prompt="You are finding GIS manager contacts for Alberta villages. You MUST always call lookup_county first to find the county. Then call query_rag with the county name. Only call web_search_gis if query_rag confidence is below 0.7. Never skip lookup_county.",
+    response_format=GISContact
+)
+
 
 try:
     import pywinstyles
@@ -91,7 +113,7 @@ class App:
         # Welcome message — hidden once a file is selected
         self.welcome_label = ttk.Label(
             self.root,
-            text="Welcome to AI Outreach.\nGet started by selecting a file.",
+            text="Welcome to AI Outreach for Alberta.\nGet started by selecting a file.",
             style="Welcome.TLabel", justify=tk.CENTER
         )
         self.welcome_label.pack(pady=(8, 0))
@@ -935,28 +957,15 @@ class App:
                                     value=min(self.progress['value'] + 1, self.progress['maximum'])
                                 ))
 
-                                match role:
-                                    case Role.GIS:
-                                        system_prompt = self.prompt_gis
-                                    case Role.MAYOR:
-                                        system_prompt = self.prompt_mayor
-                                    case Role.ASSESSOR:
-                                        system_prompt = self.prompt_assessor
-
                                 try:
-                                    state = df.loc[idx, self.column_for["State"]] if self.column_for.get("State") else ""
-                                    state = "" if pd.isna(state) else str(state)
-                                    info = openai_hunter_client.search(
-                                        f"{value} {state} Government".strip(),
-                                        role,
-                                        system_prompt
-                                    )
+                                    result = graph.invoke({
+                                        "messages": [{"role": "user", "content": f"Find the GIS manager for {value}, Alberta"}]
+                                    })
+                                    info = result["messages"][-1].content
                                 except openai.APIConnectionError:
                                     raise
-                                
                                 except Exception as e:
-                                    
-                                    self.logger.error(f"OpenAI search failed for row {idx} ({value}): {str(e)}")
+                                    self.logger.error(f"Agent search failed for row {idx} ({value}): {str(e)}")
                                     continue
 
                                 info = (info or "").strip()

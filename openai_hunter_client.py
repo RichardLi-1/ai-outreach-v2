@@ -32,6 +32,7 @@ def search(prompt: str, role: Role, system_prompt: str) -> str:
         max_tokens = settings.max_tokens,
     )
     
+    print(chat)
     if not chat.choices:
         logger.error("Empty response from OpenAI")
         return None
@@ -57,3 +58,19 @@ def verify_email(email):
     logger.info(response.json())
 
     return (response.status_code, response.json())
+
+
+"""
+
+
+
+if __name__ == "__main__":
+    #print("Testing lookup county")
+    #content = _lookup_county("Vegreville", "AB - Alberta", settings.prompt_find_county)
+    #print(content)
+
+    #print("Testing file ingestion")
+    #ingest_file("alberta.pdf")
+
+    print("Testing assistant creation")
+    create_assistant("vs_69b074dcd92081918de4d72158657bce")"""
