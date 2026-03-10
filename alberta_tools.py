@@ -17,13 +17,10 @@ client = OpenAI(api_key=settings.openai_api_key, timeout=Timeout(60, connect=10)
 def lookup_county(town: str, state: str) -> str:
     """Find which county or municipal district a town is located in for a given Canadian province. Returns only the county name."""
     logger.info(f"Calling OpenAI to search for county of {town} in {state}")
-    message=[]
-    prompt = settings.initial_prompt + ": " + town + ", " + state
-
-    message.append({
-        "role": "user",
-        "content": prompt
-    })
+    message=[
+        {"role": "system", "content": settings.prompt_find_county},
+        {"role": "user", "content": f"{town}, {state}"}
+    ]
 
     chat = client.chat.completions.create(
         model="gpt-4o-mini-search-preview",
@@ -44,13 +41,22 @@ def query_rag(county: str) -> str:
     response = client.responses.create(
         model="gpt-4o-mini",
         instructions=settings.prompt_find_in_file,
-        input=f"GIS manager for {county}, Alberta",
+        input=county,
         tools=[{
             "type": "file_search",
             "vector_store_ids": [settings.file_id]
         }]
     )
-    result = response.output_text  # then json.loads()
+    for item in response.output:
+        if item.type == "file_search_call":
+            logger.info(f"[RAG] file_search status: {item.status}")
+            if hasattr(item, 'results') and item.results:
+                for r in item.results:
+                    logger.info(f"[RAG] hit score={r.score:.3f} | {str(r.text)[:200]}")
+            else:
+                logger.warning("[RAG] file_search returned no results")
+    result = response.output_text
+    logger.info(f"[RAG] model output: {result}")
     return result
 
 

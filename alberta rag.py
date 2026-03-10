@@ -17,7 +17,7 @@ from tkinter import messagebox, filedialog, scrolledtext, ttk
 import logging
 from pathlib import Path
 from langchain.agents import create_agent
-from alberta_tools import lookup_county, query_rag, web_search_gis
+from alberta_tools import lookup_county, query_rag
 
 os.environ["OPENAI_API_KEY"] = settings.openai_api_key
 
@@ -33,8 +33,8 @@ class GISContact(openai.BaseModel):
 
 graph = create_agent(
     model="openai:gpt-4o-mini",
-    tools=[lookup_county, query_rag, web_search_gis],
-    system_prompt="You are finding GIS manager contacts for Alberta villages. You MUST always call lookup_county first to find the county. Then call query_rag with the county name. Only call web_search_gis if query_rag confidence is below 0.7. Never skip lookup_county.",
+    tools=[lookup_county, query_rag],
+    system_prompt="You are finding GIS manager contacts for Alberta villages. You MUST always call lookup_county first to find the county. Then call query_rag with the county name. If query_rag returns low confidence or nothing, return confidence 0 — do not search elsewhere.",
     response_format=GISContact
 )
 
