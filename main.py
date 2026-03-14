@@ -76,6 +76,7 @@ class App:
         self.cols = []
 
         self.column_for = {}
+        self.role_tags = {}
         self.dynamic_widgets = []
         self.current_result_event = None
         self.current_run_id = 0
@@ -355,7 +356,7 @@ class App:
         ttk.Button(btn_frame, text="Save Config to File", width=20, command=save_config).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Save and Close", width=20, command=save).pack(side=tk.LEFT, padx=5)
 
-    def select_role_to_search(self, section_name, sheet_name, run_id, state_val="unknown"):
+    def select_role_to_search(self, section_name, sheet_name, run_id, state_val="unknown", sections_remaining=0):
         result = threading.Event()
         self.current_result_event = result
         role_choice_value = [0]
@@ -377,13 +378,36 @@ class App:
             label = ttk.Label(left_frame, text=f"Select role(s) to search for in sheet {display_name} section {state_display}")
             label.pack(pady=5)
             check_vars = {}
-            role_labels = {1: "GIS Manager", 2: "Mayor/County Manager", 3: "Property Assessor"}
-            for text, val in [("GIS Manager", 1), ("Mayor/County Manager", 2), ("Property Assessor", 3), ("Skip", 0)]:
+            role_labels = {1: "GIS Manager", 3: "Property Assessor"}
+            role_default_tags = {1: "NG911", 3: "QQ"}
+            role_tag_vars = {}
+            role_tag_rows = {}
+
+            for text, val in [("GIS Manager", 1), ("Property Assessor", 3), ("Skip", 0)]:
                 var = tk.IntVar(value=0)
                 check_vars[val] = var
                 cb = ttk.Checkbutton(left_frame, text=text, variable=var,
                                     command=lambda v=val: on_check_toggle(v))
                 cb.pack(pady=3, anchor=tk.W)
+
+            # Per-role tag fields (hidden until a role is selected)
+            tag_frame = ttk.LabelFrame(left_frame, text="Tags", padding=(5, 4))
+            ttk.Label(tag_frame, text="Tag").grid(row=0, column=1, padx=(5, 0), pady=(0, 2))
+            ttk.Label(tag_frame, text="Contact Tag").grid(row=0, column=2, padx=(5, 0), pady=(0, 2))
+            for i, (val, role_name) in enumerate([(1, "GIS Manager"), (3, "Assessor")], start=1):
+                existing = self.role_tags.get(val, (role_default_tags.get(val, ""), role_default_tags.get(val, "")))
+                tag_var = tk.StringVar(value=existing[0] or role_default_tags.get(val, ""))
+                contact_tag_var = tk.StringVar(value=existing[1] or role_default_tags.get(val, ""))
+                role_tag_vars[val] = (tag_var, contact_tag_var)
+                lbl = ttk.Label(tag_frame, text=role_name)
+                tag_cb = ttk.Combobox(tag_frame, textvariable=tag_var, values=["NG911", "QQ"], width=10)
+                ctag_cb = ttk.Combobox(tag_frame, textvariable=contact_tag_var, values=["NG911", "QQ"], width=10)
+                lbl.grid(row=i, column=0, sticky=tk.W, pady=2)
+                tag_cb.grid(row=i, column=1, padx=(5, 0), pady=2)
+                ctag_cb.grid(row=i, column=2, padx=(5, 0), pady=2)
+                role_tag_rows[val] = (lbl, tag_cb, ctag_cb)
+                for w in role_tag_rows[val]:
+                    w.grid_remove()
 
             sheet_action_var = tk.IntVar(value=0)
             sheet_action_label = tk.StringVar()
@@ -391,12 +415,13 @@ class App:
 
             def update_sheet_action_label():
                 display_sheet = re.sub(r"_part(\d+)$", lambda m: f" Part {m.group(1)}", sheet_name)
+                remaining_str = f" ({sections_remaining} sections)" if sections_remaining > 0 else ""
                 if check_vars[0].get() == 1:
-                    sheet_action_label.set(f"Skip all remaining sections in sheet \"{display_sheet}\"")
+                    sheet_action_label.set(f"Skip all sections in sheet \"{display_sheet}\"{remaining_str}")
                 else:
                     selected_roles = [role_labels[val] for val, var in check_vars.items() if var.get() == 1 and val in role_labels]
                     roles_text = ", ".join(selected_roles) if selected_roles else "selected role(s)"
-                    sheet_action_label.set(f"Apply {roles_text} to all remaining sections in sheet \"{display_sheet}\"")
+                    sheet_action_label.set(f"Apply {roles_text} to all sections in sheet \"{display_sheet}\"{remaining_str}")
 
             def update_run_button_state():
                 has_role = any(entry.get() for entry in check_vars.values())
@@ -413,6 +438,21 @@ class App:
                     sheet_action_var.set(0)
                     sheet_action_cb.config(state="disabled")
 
+            def update_tag_defaults():
+                any_visible = False
+                for val, rows in role_tag_rows.items():
+                    if check_vars.get(val) and check_vars[val].get() == 1:
+                        for w in rows:
+                            w.grid()
+                        any_visible = True
+                    else:
+                        for w in rows:
+                            w.grid_remove()
+                if any_visible:
+                    tag_frame.pack(pady=(10, 0), anchor=tk.W, fill=tk.X)
+                else:
+                    tag_frame.pack_forget()
+
             def on_check_toggle(toggled_val):
                 if toggled_val == 0 and check_vars[0].get() == 1:
                     for val, var in check_vars.items():
@@ -424,6 +464,7 @@ class App:
                 if mode != last_mode[0]:
                     sheet_action_var.set(0)
                     last_mode[0] = mode
+                update_tag_defaults()
                 update_sheet_action_label()
                 update_run_button_state()
                 update_run_button_text()
@@ -469,6 +510,12 @@ class App:
 
                 if sheet_action_var.get() == 1:
                     self.sheet_role_choices[sheet_name] = selected
+
+                self.role_tags = {
+                    val: (tv.get() or None, ctv.get() or None)
+                    for val, (tv, ctv) in role_tag_vars.items()
+                    if check_vars.get(val) and check_vars[val].get() == 1
+                }
 
                 # Update column mappings from combobox selections
                 self.column_for = {key: entry.get() or None for key, entry in entries.items()}
@@ -584,15 +631,17 @@ class App:
                 cols["Last Name"] = column
             elif normalized in ["position", "role", "title", "role/title", "title/role"]:
                 cols["Role/Title"] = column
+            elif "contact" in normalized and ("state" in normalized or "province" in normalized):
+                cols["Contact State"] = column
             elif normalized in ["state", "province", "state/province", "province/state", "provinceorstate"] or "state" in normalized or "province" in normalized:
                 if "State" not in cols:  # Don't overwrite if we already have a state column from an exact match:
                     cols["State"] = column
             elif normalized in ["contactlinkedinprofile", "contactlinkedin", "linkedin", "linkedinprofile"] or "linkedin" in normalized:
                 cols["LinkedIn"] = column
-            elif normalized in ["tag"]:
-                cols["Tag"] = column
-            elif normalized in ["contacttag"]:
+            elif "contact" in normalized and "tag" in normalized:
                 cols["Contact Tag"] = column
+            elif "tag" in normalized:
+                cols["Tag"] = column
             if column is not None and str(column).strip() != "":
                 self.cols.append(column)
         return cols
@@ -813,6 +862,7 @@ class App:
                     self.column_for["LinkedIn"] = cols.get("LinkedIn")
                     self.column_for["Tag"] = cols.get("Tag")
                     self.column_for["Contact Tag"] = cols.get("Contact Tag")
+                    self.column_for["Contact State"] = cols.get("Contact State")
 
 
                     # Read state value now so it can be shown in the role selection dialog
@@ -837,7 +887,7 @@ class App:
                                 ),
                             ))
                         try:
-                            userChoices = self.select_role_to_search(name, sheet_name, run_id, state_val)
+                            userChoices = self.select_role_to_search(name, sheet_name, run_id, state_val, total_sections - section_idx + 1)
                         except TypeError:
                             self.logger.error("Invalid input, only 1, 2, or 3 accepted")
                         except ValueError:
@@ -871,7 +921,8 @@ class App:
                     for userChoice in userChoices:
                         df = df_original.copy()  # fresh copy so roles don't overwrite each other
                         role = Role(userChoice)
-                        tag_str = tag_map.get(userChoice, "data")
+                        _role_tag = self.role_tags.get(userChoice)
+                        tag_str = (_role_tag[0] if _role_tag else None) or tag_map.get(userChoice, "data")
                         # out_filename is set at write time using finish timestamp to avoid collisions
 
                         self.root.after(0, lambda n=name, tag=tag_str, si=section_idx, st=total_sections: (
@@ -899,11 +950,13 @@ class App:
                             self.column_for["Role/Title"],
                             self.column_for["LinkedIn"],
                             self.column_for["Contact Tag"],
+                            self.column_for["Contact State"],
                             "Source",
                             "Email Confidence",
                             "Alternative Email",
                             "Alternative Email Confidence",
                             "Hunter Email Source",
+                            "Email Domain"
                         ]:
                             if col and col in df.columns:
                                 df[col] = ""
@@ -977,22 +1030,24 @@ class App:
                                     df.loc[idx, self.column_for["Phone Number"]] = parsedInfo.get("phoneNumber", "")
                                     df.loc[idx, self.column_for["Role/Title"]] = parsedInfo.get("role", "")
                                     df.loc[idx, "Email Domain"] = parsedInfo.get("emailDomain", "")
-                                    if role == Role.ASSESSOR:
-                                        df.loc[idx, self.column_for["Tag"]] = "QQ"
-                                        df.loc[idx, "Contact Tag"] = "QQ"
-                                    elif role == Role.GIS:
-                                        df.loc[idx, self.column_for["Tag"]] = "NG911"
-                                        df.loc[idx, "Contact Tag"] = "NG911"
+                                    _tag, _contact_tag = self.role_tags.get(userChoice, (None, None))
+                                    df.loc[idx, self.column_for["Tag"]] = _tag
+                                    df.loc[idx, self.column_for["Contact Tag"]] = _contact_tag
                                     df.loc[idx, "Source"] = parsedInfo.get("sourceWebsite" , "")
 
                                     state_mapping = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
+                                    #Correct state format
                                     if self.column_for.get("State"):
                                         _raw_state = df.loc[idx, self.column_for["State"]]
                                         thisState = str(_raw_state).strip().lower() if not pd.isna(_raw_state) else ""
                                         if thisState and thisState in state_mapping:
                                             df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState.lower())
+                                            if self.column_for.get("Contact State"):
+                                                df.loc[idx, self.column_for["Contact State"]] = state_mapping.get(thisState.lower())
                                         elif thisState and thisState[0:2] in state_mapping:
                                             df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState[0:2].lower())
+                                            if self.column_for.get("Contact State"):
+                                                df.loc[idx, self.column_for["Contact State"]] = state_mapping.get(thisState[0:2].lower())
 
                                     reFind = False
                                     email_val = parsedInfo.get("email")
