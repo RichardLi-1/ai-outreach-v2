@@ -3,6 +3,8 @@ import openai_hunter_client
 import json
 from presets import Role, stateCorrectionMap
 from datetime import datetime
+import hunter_finder
+import name_splitter
 import winsound
 import threading
 from settings import settings
@@ -140,6 +142,8 @@ class App:
         controls_frame.pack(pady=(14, 6))
         ttk.Button(controls_frame, text="Settings", width=14, command=self.open_settings).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls_frame, text="Select File", width=14, command=self.select_file, style="Accent.TButton").pack(side=tk.LEFT, padx=8)
+        ttk.Button(controls_frame, text="Hunter Finder", width=12, command=self.open_hunter_finder).pack(side=tk.LEFT, padx=4)
+        ttk.Button(controls_frame, text="Name Splitter", width=12, command=self.open_name_splitter).pack(side=tk.LEFT, padx=4)
 
         # Output path section
         output_frame = ttk.LabelFrame(self.root, text="Output", padding=(10, 8))
@@ -544,6 +548,12 @@ class App:
         return role_choice_value
 
 
+    def open_hunter_finder(self):
+        hunter_finder.open_hunter_finder(self.root, self.formatter, self._apply_theme_to_titlebar, TextHandler)
+
+    def open_name_splitter(self):
+        name_splitter.open_name_splitter(self.root, self._apply_theme_to_titlebar)
+
     def select_file(self):
         # Warn if a run is in progress
         if self._run_active:
@@ -629,7 +639,7 @@ class App:
                 cols["First Name"] = column
             elif lower in ["last name", "contact last name", "last", "surname"]:
                 cols["Last Name"] = column
-            elif normalized in ["position", "role", "title", "role/title", "title/role"]:
+            elif normalized in ["position", "role", "title", "role/title", "title/role", "jobtitle"]:
                 cols["Role/Title"] = column
             elif "contact" in normalized and ("state" in normalized or "province" in normalized):
                 cols["Contact State"] = column
@@ -790,10 +800,11 @@ class App:
 
             def _write_file(complete = True):
                 #WRITE per role — timestamp at finish time to avoid collisions
+                write_dir = Path(self.output_path) if self.output_path else input_path.parent
                 if complete:
-                    out_filename = output_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+                    out_filename = write_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
                 else:
-                    out_filename = output_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_incomplete{ext}"
+                    out_filename = write_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_incomplete{ext}"
                 if ext == ".csv":
                     df.to_csv(out_filename, index=False)
                 else:
