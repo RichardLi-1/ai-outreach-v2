@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 def open_merge_tool(root, apply_theme_fn):
     win = tk.Toplevel(root)
     win.title("Merge Files")
-    win.minsize(560, 500)
+    win.minsize(560, 440)
     apply_theme_fn(win)
 
     state = {
@@ -17,6 +17,7 @@ def open_merge_tool(root, apply_theme_fn):
         "path1": None, "path2": None,
         "output_path": None,
         "run_active": False, "run_id": 0,
+        "_col_pairs": [],
     }
 
     # ── File selectors ────────────────────────────────────────────────────────
@@ -58,8 +59,8 @@ def open_merge_tool(root, apply_theme_fn):
                command=lambda: _load_file(2), style="Accent.TButton").grid(row=1, column=0, pady=3, padx=(0, 8))
     lbl2.grid(row=1, column=1, sticky=tk.W)
 
-    # ── Merge key columns ─────────────────────────────────────────────────────
-    key_frame = ttk.LabelFrame(win, text="Merge On (common columns — select one or more)", padding=(10, 8))
+    # ── Match key columns ─────────────────────────────────────────────────────
+    key_frame = ttk.LabelFrame(win, text="Match On — select the column(s) that identify the same person/row in both files", padding=(10, 8))
     key_frame.pack(padx=20, pady=(0, 6), fill=tk.X)
 
     key_list = tk.Listbox(key_frame, selectmode=tk.MULTIPLE, height=5, exportselection=False)
@@ -75,16 +76,13 @@ def open_merge_tool(root, apply_theme_fn):
         df1, df2 = state["df1"], state["df2"]
         if df1 is None or df2 is None:
             return
-
-        # Case-insensitive, stripped match: map normalised name → original name in df2
         df2_norm = {str(c).strip().lower(): c for c in df2.columns}
-        # Build list of (col_in_df1, col_in_df2) pairs
         common_pairs = []
         for c in df1.columns:
             match = df2_norm.get(str(c).strip().lower())
             if match is not None:
                 common_pairs.append((c, match))
-        state["_col_pairs"] = common_pairs  # store for use in _worker
+        state["_col_pairs"] = common_pairs
 
         key_list.delete(0, tk.END)
         if not common_pairs:
@@ -95,14 +93,14 @@ def open_merge_tool(root, apply_theme_fn):
         for col1, col2 in common_pairs:
             label = col1 if str(col1).strip().lower() == str(col2).strip().lower() else f"{col1}  ↔  {col2}"
             key_list.insert(tk.END, label)
-        # auto-select columns that look like identifiers
+        # auto-select identifier-looking columns
         for i, (col1, _) in enumerate(common_pairs):
             if any(k in str(col1).lower() for k in ("id", "name", "email", "key")):
                 key_list.selection_set(i)
         if not key_list.curselection():
             key_list.selection_set(0)
         run_btn.config(state="normal")
-        status_label.config(text="Ready. Select merge key(s) then click Run.")
+        status_label.config(text="Ready. Select the matching column(s) then click Run.")
 
     # ── Output folder ─────────────────────────────────────────────────────────
     out_frame = ttk.LabelFrame(win, text="Output", padding=(10, 8))
@@ -118,12 +116,9 @@ def open_merge_tool(root, apply_theme_fn):
         out_entry.insert(0, folder)
         out_entry.config(state="readonly")
 
-    def _browse_output():
-        folder = filedialog.askdirectory(title="Select Output Folder", parent=win)
-        if folder:
-            _set_output(folder)
-
-    ttk.Button(out_frame, text="Browse…", command=_browse_output).grid(row=0, column=2)
+    ttk.Button(out_frame, text="Browse…",
+               command=lambda: _set_output(filedialog.askdirectory(title="Select Output Folder", parent=win) or state["output_path"])
+               ).grid(row=0, column=2)
 
     # ── Status + log ──────────────────────────────────────────────────────────
     status_label = ttk.Label(win, text="Select two files to begin.", style="Gray.TLabel")
@@ -144,7 +139,7 @@ def open_merge_tool(root, apply_theme_fn):
 
     run_btn = ttk.Button(btn_frame, text="Run", width=10, state="disabled")
     run_btn.pack(side=tk.LEFT, padx=6)
-    cancel_btn = ttk.Button(btn_frame, text="Cancel", width=10)
+    cancel_btn = ttk.Button(btn_frame, text="Cancel", width=10, command=lambda: _cancel())
     cancel_btn.pack(side=tk.LEFT, padx=6)
     cancel_btn.pack_forget()
 
@@ -157,16 +152,12 @@ def open_merge_tool(root, apply_theme_fn):
             status_label.config(text="Cancelled.")
             _log("Run cancelled.")
 
-    cancel_btn.config(command=_cancel)
-
     def _run():
         sel = key_list.curselection()
         if not sel:
-            messagebox.showwarning("No Key", "Select at least one column to merge on.", parent=win)
+            messagebox.showwarning("No Key", "Select at least one column to match on.", parent=win)
             return
-        pairs = state.get("_col_pairs", [])
-        selected_pairs = [pairs[i] for i in sel]
-        how = how_var.get()
+        selected_pairs = [state["_col_pairs"][i] for i in sel]
 
         state["run_active"] = True
         state["run_id"] += 1
@@ -185,32 +176,51 @@ def open_merge_tool(root, apply_theme_fn):
 
                 keys1 = [p[0] for p in selected_pairs]
                 keys2 = [p[1] for p in selected_pairs]
-                # Rename df2 key columns to match df1 so merge works
+
+                # Normalise df2 key column names to match df1
                 rename_map = {k2: k1 for k1, k2 in zip(keys1, keys2) if k1 != k2}
                 if rename_map:
                     df2 = df2.rename(columns=rename_map)
-                    _log(f"  Renamed in File 2: {rename_map}")
                 keys = keys1
 
-                _log(f"Merging on: {', '.join(keys)}  ({how} join)")
+                _log(f"Matching on: {', '.join(str(k) for k in keys)}")
                 _log(f"File 1: {len(df1)} rows   File 2: {len(df2)} rows")
 
-                dup1 = len(df1) - df1[keys].drop_duplicates().shape[0]
-                dup2 = len(df2) - df2[keys].drop_duplicates().shape[0]
-                if dup1:
-                    _log(f"  Warning: File 1 has {dup1} duplicate key row(s) — keeping first occurrence.")
-                    df1 = df1.drop_duplicates(subset=keys, keep="first")
-                if dup2:
-                    _log(f"  Warning: File 2 has {dup2} duplicate key row(s) — keeping first occurrence.")
-                    df2 = df2.drop_duplicates(subset=keys, keep="first")
+                # Add temporary normalised key columns (lowercase + stripped) for matching
+                norm_keys = [f"__key_{i}__" for i in range(len(keys))]
+                for k, nk in zip(keys, norm_keys):
+                    df1[nk] = df1[k].fillna("").astype(str).str.strip().str.lower()
+                    df2[nk] = df2[k].fillna("").astype(str).str.strip().str.lower()
 
-                merged = pd.merge(df1, df2, on=keys, how=how)
+                # Deduplicate on normalised keys to avoid row explosion
+                dup1 = len(df1) - df1[norm_keys].drop_duplicates().shape[0]
+                dup2 = len(df2) - df2[norm_keys].drop_duplicates().shape[0]
+                if dup1:
+                    _log(f"  Warning: File 1 has {dup1} duplicate key row(s) — keeping first.")
+                    df1 = df1.drop_duplicates(subset=norm_keys, keep="first")
+                if dup2:
+                    _log(f"  Warning: File 2 has {dup2} duplicate key row(s) — keeping first.")
+                    df2 = df2.drop_duplicates(subset=norm_keys, keep="first")
+
+                # Left join on normalised keys, then drop them
+                merged = pd.merge(df1, df2, on=norm_keys, how="left")
+                merged.drop(columns=norm_keys, inplace=True)
 
                 if run_id != state["run_id"]:
                     _log("Cancelled.")
                     return
 
-                _log(f"Result: {len(merged)} rows")
+                # Coalesce _x/_y pairs: prefer File 1, fill blanks from File 2
+                for col in list(merged.columns):
+                    if col.endswith("_x") and col[:-2] + "_y" in merged.columns:
+                        base, cx, cy = col[:-2], col, col[:-2] + "_y"
+                        v1 = merged[cx].fillna("").astype(str).str.strip()
+                        v2 = merged[cy].fillna("").astype(str).str.strip()
+                        merged[base] = v1.where(v1 != "", v2)
+                        merged.drop(columns=[cx, cy], inplace=True)
+                        _log(f"  '{base}': filled {(v1 == '').sum()} blank(s) from File 2")
+
+                _log(f"Result: {len(merged)} rows, {len(merged.columns)} columns")
 
                 ext = Path(path1).suffix.lower()
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -240,12 +250,3 @@ def open_merge_tool(root, apply_theme_fn):
         threading.Thread(target=_worker, daemon=True).start()
 
     run_btn.config(command=_run)
-
-    # ── Join type ─────────────────────────────────────────────────────────────
-    how_frame = ttk.Frame(win)
-    how_frame.pack(before=btn_frame, pady=(0, 4))
-    ttk.Label(how_frame, text="Join type:").pack(side=tk.LEFT, padx=(0, 6))
-    how_var = tk.StringVar(value="outer")
-    for label, val in (("Outer (keep all rows)", "outer"), ("Inner (matching only)", "inner"),
-                       ("Left", "left"), ("Right", "right")):
-        ttk.Radiobutton(how_frame, text=label, variable=how_var, value=val).pack(side=tk.LEFT, padx=4)
