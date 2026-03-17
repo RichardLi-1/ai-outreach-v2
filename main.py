@@ -5,6 +5,7 @@ from presets import Role, stateCorrectionMap
 from datetime import datetime
 import hunter_finder
 import name_splitter
+import merge
 import winsound
 import threading
 from settings import settings
@@ -142,8 +143,56 @@ class App:
         controls_frame.pack(pady=(14, 6))
         ttk.Button(controls_frame, text="Settings", width=14, command=self.open_settings).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls_frame, text="Select File", width=14, command=self.select_file, style="Accent.TButton").pack(side=tk.LEFT, padx=8)
-        ttk.Button(controls_frame, text="Hunter Finder", width=12, command=self.open_hunter_finder).pack(side=tk.LEFT, padx=4)
-        ttk.Button(controls_frame, text="Name Splitter", width=12, command=self.open_name_splitter).pack(side=tk.LEFT, padx=4)
+
+        more_btn = ttk.Button(controls_frame, text="More Tools ▾", width=14)
+        more_btn.pack(side=tk.LEFT, padx=4)
+
+        self._more_popup = None
+
+        def _show_more_menu():
+            if self._more_popup and self._more_popup.winfo_exists():
+                self._more_popup.destroy()
+                self._more_popup = None
+                return
+
+            popup = tk.Toplevel(self.root)
+            popup.overrideredirect(True)
+            popup.resizable(False, False)
+            sv_ttk.use_dark_theme() if sv_ttk.get_theme() == "dark" else sv_ttk.use_light_theme()
+            self._more_popup = popup
+
+            items = [
+                ("Hunter Finder", self.open_hunter_finder),
+                ("Name Splitter", self.open_name_splitter),
+                ("Merge Files",   self.open_merge_tool),
+            ]
+
+            frame = ttk.Frame(popup, padding=4)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            def _pick(cmd):
+                popup.destroy()
+                self._more_popup = None
+                cmd()
+
+            for label, cmd in items:
+                ttk.Button(frame, text=label, width=16,
+                           command=lambda c=cmd: _pick(c)).pack(fill=tk.X, pady=2)
+
+            popup.update_idletasks()
+            x = more_btn.winfo_rootx()
+            y = more_btn.winfo_rooty() + more_btn.winfo_height() + 2
+            popup.geometry(f"+{x}+{y}")
+
+            def _on_focusout(e):
+                if self._more_popup and self._more_popup.winfo_exists():
+                    self._more_popup.destroy()
+                    self._more_popup = None
+
+            popup.bind("<FocusOut>", _on_focusout)
+            popup.focus_set()
+
+        more_btn.config(command=_show_more_menu)
 
         # Output path section
         output_frame = ttk.LabelFrame(self.root, text="Output", padding=(10, 8))
@@ -553,6 +602,9 @@ class App:
 
     def open_name_splitter(self):
         name_splitter.open_name_splitter(self.root, self._apply_theme_to_titlebar)
+
+    def open_merge_tool(self):
+        merge.open_merge_tool(self.root, self._apply_theme_to_titlebar)
 
     def select_file(self):
         # Warn if a run is in progress
