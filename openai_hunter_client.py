@@ -1,7 +1,7 @@
 from settings import settings
 from openai import OpenAI, Timeout
 import requests
-from presets import Role
+from presets import Role, SearchFor
 import logging
 import re
 
@@ -26,6 +26,27 @@ def search(prompt: str, role: Role, system_prompt: str) -> str:
         "role": "user",
         "content": prompt
     })
+
+    chat = client.chat.completions.create(
+        model="gpt-4o-mini-search-preview",
+        messages=message,
+        max_tokens = settings.max_tokens,
+    )
+    
+    print(chat)
+    if not chat.choices:
+        logger.error("Empty response from OpenAI")
+        return None
+    logger.info(chat.choices[0].message.content)
+    return chat.choices[0].message.content
+
+def search_misc(prompt: str, searchType: SearchFor) -> str: #for searching population, etc
+    logger.info(f"Calling OpenAI to search for {prompt}")
+
+    if searchType == SearchFor.POPULATION:
+        message=[{"role": "system", "content": settings.prompt_find_population}]
+
+    message.append({"role": "user", "content": prompt})
 
     chat = client.chat.completions.create(
         model="gpt-4o-mini-search-preview",

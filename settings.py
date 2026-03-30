@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     prompt_format_assessor: str
     prompt_find_county: str
     prompt_find_in_file: str
+    prompt_find_population: str
     file_id: str
     model_config = ConfigDict(env_file=get_env_path())
 settings = Settings()

@@ -1,7 +1,7 @@
 import pandas as pd
 import openai_hunter_client
 import json
-from presets import Role, stateCorrectionMap
+from presets import *
 from datetime import datetime
 import hunter_finder
 import name_splitter
@@ -681,6 +681,8 @@ class App:
             column_str = str(column) if not isinstance(column, str) else column
             lower = column_str.lower()
             normalized = ''.join(lower.split())
+            if "population" in lower:
+                cols["Population"] = column
             if lower in ["county", "county/city", "city/county"]:
                 cols["County/City"] = column
             elif lower in ["email", "contact email"]:
@@ -915,17 +917,23 @@ class App:
                     self.logger.info("Headers found: " + str(cols))
 
                     #Read the data from cols returned by _detect_columns
-                    self.column_for["County/City"] = cols.get("County/City")
-                    self.column_for["Email"] = cols.get("Email")
-                    self.column_for["Phone Number"] = cols.get("Phone Number")
-                    self.column_for["First Name"] = cols.get("First Name")
-                    self.column_for["Last Name"] = cols.get("Last Name")
-                    self.column_for["Role/Title"] = cols.get("Role/Title")
-                    self.column_for["State"] = cols.get("State")
-                    self.column_for["LinkedIn"] = cols.get("LinkedIn")
-                    self.column_for["Tag"] = cols.get("Tag")
-                    self.column_for["Contact Tag"] = cols.get("Contact Tag")
-                    self.column_for["Contact State"] = cols.get("Contact State")
+                    for key in ["Population", "County/City", "Email", "Phone Number",
+                                "First Name", "Last Name", "Role/Title", "State",
+                                "LinkedIn", "Tag", "Contact Tag", "Contact State"]:
+                        self.column_for[key] = cols.get(key)
+
+                    #self.column_for["Population"] = cols.get("Population")
+                    #self.column_for["County/City"] = cols.get("County/City")
+                    #self.column_for["Email"] = cols.get("Email")
+                    #self.column_for["Phone Number"] = cols.get("Phone Number")
+                    #self.column_for["First Name"] = cols.get("First Name")
+                    #self.column_for["Last Name"] = cols.get("Last Name")
+                    #self.column_for["Role/Title"] = cols.get("Role/Title")
+                    #self.column_for["State"] = cols.get("State")
+                    #self.column_for["LinkedIn"] = cols.get("LinkedIn")
+                    #self.column_for["Tag"] = cols.get("Tag")
+                    #self.column_for["Contact Tag"] = cols.get("Contact Tag")
+                    #self.column_for["Contact State"] = cols.get("Contact State")
 
 
                     # Read state value now so it can be shown in the role selection dialog
@@ -1058,11 +1066,22 @@ class App:
                                         system_prompt = self.prompt_mayor
                                     case Role.ASSESSOR:
                                         system_prompt = self.prompt_assessor
+                                
+                                if not df.loc[idx, self.column_for["Population"]]: #test this
+                                    try:
+                                        population = openai_hunter_client.search(
+                                            f"{value} {state}".strip()
+                                        )
+                                        self.logger.info(f"Found {value} {state} population:" + str(population))
+                                        df.loc[idx, self.column_for["Population"]] = population
+                                    except openai.APIConnectionError:
+                                        raise
+
 
                                 try:
                                     state = df.loc[idx, self.column_for["State"]] if self.column_for.get("State") else ""
                                     state = "" if pd.isna(state) else str(state)
-                                    info = openai_hunter_client.search(
+                                    info = openai_hunter_client.search(#                                                  ------------------OpenAI search for person---------------------
                                         f"{value} {state} Government".strip(),
                                         role,
                                         system_prompt
@@ -1071,7 +1090,6 @@ class App:
                                     raise
                                 
                                 except Exception as e:
-                                    
                                     self.logger.error(f"OpenAI search failed for row {idx} ({value}): {str(e)}")
                                     continue
 

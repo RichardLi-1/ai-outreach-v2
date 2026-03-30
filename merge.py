@@ -202,6 +202,12 @@ def open_merge_tool(root, apply_theme_fn):
                     _log(f"  Warning: File 2 has {dup2} duplicate key row(s) — keeping first.")
                     df2 = df2.drop_duplicates(subset=norm_keys, keep="first")
 
+                # Report how many File 2 rows won't appear in the output
+                indicator = df2[norm_keys].merge(df1[norm_keys], on=norm_keys, how="left", indicator=True)
+                unmatched = (indicator["_merge"] == "left_only").sum()
+                if unmatched:
+                    _log(f"  Warning: {unmatched} row(s) from File 2 had no match in File 1 and will be dropped.")
+
                 # Left join on normalised keys, then drop them
                 merged = pd.merge(df1, df2, on=norm_keys, how="left")
                 merged.drop(columns=norm_keys, inplace=True)

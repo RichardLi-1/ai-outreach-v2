@@ -5,6 +5,10 @@ class Role(Enum):
     MAYOR = 2
     ASSESSOR = 3
 
+class SearchFor(Enum):
+    POPULATION = 1
+    OUTREACHMESSAGE = 2
+
 stateCorrectionMap = {
     ("al", "alabama"): "AL – Alabama",
     ("ak", "alaska"): "AK – Alaska",
