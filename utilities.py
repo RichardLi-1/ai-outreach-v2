@@ -20,9 +20,10 @@ def _detect_columns(df):
             "Last Name": ["lastname", "contactlastname", "last", "surname"],
             "Role/Title": ["position", "role", "title", "role/title", "title/role", "jobtitle"],
             "LinkedIn":     ["linkedin", "contactlinkedin", "linkedinprofile", "contactlinkedinprofile"],
-            "Outreach Message": ["contactlinkedinoutreachmessage", "linkedinoutreachmessage", "outreachmessage"],
+            "Contact LinkedIn Outreach Message": ["contactlinkedinoutreachmessage", "linkedinoutreachmessage", "outreachmessage"],
             "Email Domain": ["emaildomain"],
-            "Has GIS Department": ["hasgisdepartment"]
+            "Has GIS Department": ["hasgisdepartment"],
+            "Address Data Owner / Department": ["addressdataowner/department", "addressdataowner"]
         }
 
         _COLUMN_MAP = {alias: canonical

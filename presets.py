@@ -7,7 +7,7 @@ class Role(Enum):
 
 class SearchFor(Enum):
     POPULATION = 1
-    OUTREACHMESSAGE = 2
+    OUTREACH_MESSAGE = 2
     HAS_GIS_DEPARTMENT = 3
 
 stateCorrectionMap = {

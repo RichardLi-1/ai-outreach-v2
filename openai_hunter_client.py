@@ -40,15 +40,16 @@ def search(prompt: str, role: Role, system_prompt: str) -> str:
     logger.info(chat.choices[0].message.content)
     return chat.choices[0].message.content
 
-def search_misc(prompt: str, searchType: SearchFor) -> str: #for searching population, etc
+def search_misc(prompt: str, searchType: SearchFor, name="", role="", company="") -> str: #for searching population, etc
     logger.info(f"Calling OpenAI to search for {prompt}")
 
-    if searchType == SearchFor.POPULATION:
-        message=[{"role": "system", "content": settings.prompt_find_population}]
-    elif searchType == SearchFor.OUTREACHMESSAGE:
-        message=[{"role": "system", "content": settings.prompt_find_outreach_message}]
-    elif searchType == SearchFor.HAS_GIS_DEPARTMENT:
-        message=[{"role": "system", "content": settings.prompt_has_gis_department}]
+    match searchType:
+        case SearchFor.POPULATION:
+            message=[{"role": "system", "content": settings.prompt_find_population}]
+        case SearchFor.OUTREACH_MESSAGE:
+            message=[{"role": "system", "content": settings.prompt_find_outreach_message}]
+        case SearchFor.HAS_GIS_DEPARTMENT:
+            message=[{"role": "system", "content": settings.prompt_has_gis_department}]
         
 
     message.append({"role": "user", "content": prompt})

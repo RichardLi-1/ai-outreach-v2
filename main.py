@@ -787,10 +787,32 @@ class App:
 
                     self.logger.info("Headers found: " + str(cols))
 
-                    #Read the data from cols returned by _detect_columns
-                    for key in ["Population", "County/City", "Email", "Phone Number",
+                    ALL_MAPPED_COLUMNS = ["Population", "County/City", "Email", "Phone Number", #These get mapped into the logic and control the column selection dropdowns that appear
                                 "First Name", "Last Name", "Role/Title", "State",
-                                "LinkedIn", "Tag", "Contact Tag", "Contact State", "Outreach Message", "Email Domain"]:
+                                "LinkedIn", "Tag", "Contact Tag", "Contact State",
+                                "Contact LinkedIn Outreach Message", "Email Domain", "Has GIS Department",
+                                "Address Data Owner / Department", "Source"]
+                    
+                    OUTPUT_COLUMNS = ["First Name", #These get cleared in the sheet and written over. Excludes Population, State, Tag, County/City to prevent existing data from being cleared
+                                    "Last Name",
+                                    "Email",
+                                    "Phone Number",
+                                    "Role/Title",
+                                    "LinkedIn",
+                                    "Contact Tag",
+                                    "Contact State",
+                                    "Has GIS Department",
+                                    "Address Data Owner / Department", #only clears for role=GIS
+                                    "Contact LinkedIn Outreach Message",
+                                    "Email Domain",
+                                    "Source",
+                                    "Email Confidence",
+                                    "Alternative Email",
+                                    "Alternative Email Confidence",
+                                    "Hunter Email Source"]
+
+                    #Read the data from cols returned by _detect_columns
+                    for key in ALL_MAPPED_COLUMNS:
                         self.column_for[key] = cols.get(key)
 
                     # Read state value now so it can be shown in the role selection dialog
@@ -843,7 +865,7 @@ class App:
                     df_original = df.copy()
 
                     def insert_if_missing(df, idx, col_name, default=""):
-                        if col_name.lower() not in [c.lower() for c in df.columns] and not self.column_for[col_name]:
+                        if col_name.lower() not in [c.lower() for c in df.columns] and not self.column_for.get(col_name):
                             df.insert(idx, col_name, default)
                             self.column_for[col_name] = col_name
 
@@ -861,27 +883,14 @@ class App:
                         if self.column_for["County/City"]:
                             self.logger.info("Looking for counties or cities under column: " + self.column_for["County/City"])
 
-                        all_cols_to_clear = ["First Name",
-                                    "Last Name",
-                                    "Email",
-                                    "Phone Number",
-                                    "Role/Title",
-                                    "LinkedIn",
-                                    "Contact Tag",
-                                    "Contact State",
-                                    "Has GIS Department",
-                                    "Email Domain",
-                                    "Source",
-                                    "Email Confidence",
-                                    "Alternative Email",
-                                    "Alternative Email Confidence",
-                                    "Hunter Email Source"]
+        
 
                         #Fills in missing columns, prevents TypeErrors, and clears old data
-                        for col in all_cols_to_clear:
+                        for col in OUTPUT_COLUMNS:
                             insert_if_missing(df, len(df.columns), col)
                             if self.column_for[col] and self.column_for[col] in df.columns:
-                                df[self.column_for[col]] = ""
+                                if col != "Address Data Owner / Department" or role == Role.GIS:
+                                    df[self.column_for[col]] = ""
 
                         section_incomplete_notified = False
                         rows_before = stats["rows"]
@@ -972,15 +981,20 @@ class App:
                                     df.loc[idx, self.column_for["First Name"]] = parsedInfo.get("firstName", "")
                                     df.loc[idx, self.column_for["Last Name"]] = parsedInfo.get("lastName", "")
                                     df.loc[idx, self.column_for["Email"]] = parsedInfo.get("email", "")
-                                    df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,-]", "", parsedInfo.get("phoneNumber", ""))
+                                    df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,+]", "", parsedInfo.get("phoneNumber", ""))
                                     df.loc[idx, self.column_for["Role/Title"]] = parsedInfo.get("role", "")
                                     df.loc[idx, "Email Domain"] = parsedInfo.get("emailDomain", "")
                                     _tag, _contact_tag = self.role_tags.get(userChoice, (None, None))
                                     df.loc[idx, self.column_for["Tag"]] = _tag
                                     df.loc[idx, self.column_for["Contact Tag"]] = _contact_tag
-                                    df.loc[idx, "Source"] = parsedInfo.get("sourceWebsite" , "")
+                                    if self.column_for.get("Source"):
+                                        df.loc[idx, self.column_for["Source"]] = parsedInfo.get("sourceWebsite", "")
+
+                                    if role == Role.GIS and self.column_for.get("Address Data Owner / Department"):
+                                        df.loc[idx, self.column_for["Address Data Owner / Department"]] = parsedInfo.get("addressDepartment", "")
 
                                     state_mapping = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
+                                    
                                     #Correct state format
                                     if self.column_for.get("State"):
                                         _raw_state = df.loc[idx, self.column_for["State"]]
@@ -1094,16 +1108,20 @@ class App:
                                             # Continue processing without finding alternative email
 
                                     #Generate LinkedIn Outreach Message
-                                    try:
-                                        linkedinOutreachMessage = openai_hunter_client.search_misc(
-                                            f"{value} {state}".strip(),
-                                            SearchFor.HAS_GIS_DEPARTMENT
-                                        )
-                                        if linkedinOutreachMessage is not None:
-                                            df.loc[idx, self.column_for["Has GIS Department"]] = linkedinOutreachMessage
-                                            self.logger.info(f"Generated and saved {value} {state} linkedinOutreachMessage:" + str(linkedinOutreachMessage))
-                                    except openai.APIConnectionError:
-                                        raise
+                                    if first_name and last_name and parsedInfo.get("role"):
+                                        try:
+                                            linkedinOutreachMessage = openai_hunter_client.search_misc(
+                                                f"{value} {state}".strip(),
+                                                SearchFor.OUTREACH_MESSAGE,
+                                                f"{first_name} {last_name}",
+                                                role,
+                                                f"{value} {state}"
+                                            )
+                                            if linkedinOutreachMessage:
+                                                df.loc[idx, self.column_for["Contact LinkedIn Outreach Message"]] = linkedinOutreachMessage
+                                                self.logger.info(f"Generated and saved {value} {state} linkedinOutreachMessage:" + str(linkedinOutreachMessage))
+                                        except openai.APIConnectionError:
+                                            raise
 
 
                                 except TypeError as e:
