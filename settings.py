@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     prompt_find_county: str
     prompt_find_in_file: str
     prompt_find_population: str
-    prompt_has_gis_department:str
+    prompt_has_gis_department: str
+    prompt_find_outreach_message: str
     file_id: str
     model_config = ConfigDict(env_file=get_env_path())
 settings = Settings()

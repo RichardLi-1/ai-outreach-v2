@@ -45,8 +45,11 @@ def search_misc(prompt: str, searchType: SearchFor) -> str: #for searching popul
 
     if searchType == SearchFor.POPULATION:
         message=[{"role": "system", "content": settings.prompt_find_population}]
+    elif searchType == SearchFor.OUTREACHMESSAGE:
+        message=[{"role": "system", "content": settings.prompt_find_outreach_message}]
     elif searchType == SearchFor.HAS_GIS_DEPARTMENT:
         message=[{"role": "system", "content": settings.prompt_has_gis_department}]
+        
 
     message.append({"role": "user", "content": prompt})
 
