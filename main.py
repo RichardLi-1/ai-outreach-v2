@@ -19,6 +19,7 @@ import sv_ttk
 from tkinter import messagebox, filedialog, scrolledtext, ttk
 import logging
 from pathlib import Path
+import re
 
 try:
     import pywinstyles
@@ -698,6 +699,7 @@ class App:
                 "LinkedIn":     ["linkedin", "contactlinkedin", "linkedinprofile", "contactlinkedinprofile"],
                 "Outreach Message": ["contactlinkedinoutreachmessage", "linkedinoutreachmessage", "outreachmessage"],
                 "Email Domain": ["emaildomain"],
+                "Has GIS Department": ["hasgisdepartment"]
             }
 
             _COLUMN_MAP = {alias: canonical
@@ -1005,7 +1007,7 @@ class App:
                         if self.column_for["County/City"]:
                             self.logger.info("Looking for counties or cities under column: " + self.column_for["County/City"])
 
-                        all_cols = ["First Name",
+                        all_cols_to_clear = ["First Name",
                                     "Last Name",
                                     "Email",
                                     "Phone Number",
@@ -1013,15 +1015,16 @@ class App:
                                     "LinkedIn",
                                     "Contact Tag",
                                     "Contact State",
+                                    "Has GIS Department",
                                     "Email Domain",
                                     "Source",
                                     "Email Confidence",
                                     "Alternative Email",
                                     "Alternative Email Confidence",
-                                    "Hunter Email Source"]          
+                                    "Hunter Email Source"]
 
-                        #Prevents TypeErrors, clears stale output data
-                        for col in all_cols:
+                        #Fills in missing columns, prevents TypeErrors, and clears old data
+                        for col in all_cols_to_clear:
                             insert_if_missing(df, len(df.columns), col)
                             if self.column_for[col] and self.column_for[col] in df.columns:
                                 df[self.column_for[col]] = ""
@@ -1067,8 +1070,9 @@ class App:
                                     self.logger.error(f"Failed to get state for row {idx}: {str(e)}")
                                     continue
                                 
+                                #Populate population cell
                                 populationCell = df.loc[idx, self.column_for["Population"]]
-                                if pd.isna(populationCell) or populationCell == "" or populationCell == 0: #test this
+                                if pd.isna(populationCell) or populationCell == "" or populationCell == 0:
                                     try:
                                         population = openai_hunter_client.search_misc(
                                             f"{value} {state}".strip(),
@@ -1084,10 +1088,30 @@ class App:
                                             self.logger.error(f"Failed to parse population for {value} {state} ({population})")
                                     except openai.APIConnectionError:
                                         raise
+                                
+                                if role == Role.GIS:
+                                    hasGisDepartmentCell = df.loc[idx, self.column_for["Has GIS Department"]]
+                                    try:
+                                        hasGisDepartment = openai_hunter_client.search_misc(
+                                            f"{value} {state}".strip(),
+                                            SearchFor.HAS_GIS_DEPARTMENT
+                                        )
+                                        if hasGisDepartment:
+                                            self.logger.info(f"Found {value} {state} has GIS department:" + str(hasGisDepartment))
+                                            hasGisDepartment = hasGisDepartment.replace(",", "").strip()
+                                            try:
+                                                bool(hasGisDepartment) #Check that OpenAI returned a valid boolean
+                                                df.loc[idx, self.column_for["Has GIS Department"]] = hasGisDepartment
+                                                self.logger.info(f"Saved {value} {state} has GIS department:" + str(hasGisDepartment))
+                                            except ValueError:
+                                                self.logger.error(f"Failed to parse has GIS department for {value} {state} ({hasGisDepartment})")
+                                    except openai.APIConnectionError:
+                                        raise
+                                
 
 
                                 try:
-                                    info = openai_hunter_client.search(#                                                  ------------------OpenAI search for person---------------------
+                                    info = openai_hunter_client.search(#                                             ------------------OpenAI search for person---------------------
                                         f"{value} {state} Government".strip(),
                                         role,
                                         system_prompt
@@ -1114,7 +1138,7 @@ class App:
                                     df.loc[idx, self.column_for["First Name"]] = parsedInfo.get("firstName", "")
                                     df.loc[idx, self.column_for["Last Name"]] = parsedInfo.get("lastName", "")
                                     df.loc[idx, self.column_for["Email"]] = parsedInfo.get("email", "")
-                                    df.loc[idx, self.column_for["Phone Number"]] = parsedInfo.get("phoneNumber", "")
+                                    df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,-]", "", parsedInfo.get("phoneNumber", ""))
                                     df.loc[idx, self.column_for["Role/Title"]] = parsedInfo.get("role", "")
                                     df.loc[idx, "Email Domain"] = parsedInfo.get("emailDomain", "")
                                     _tag, _contact_tag = self.role_tags.get(userChoice, (None, None))
