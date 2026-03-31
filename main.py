@@ -1102,7 +1102,7 @@ class App:
                                             try:
                                                 bool(hasGisDepartment) #Check that OpenAI returned a valid boolean
                                                 df.loc[idx, self.column_for["Has GIS Department"]] = hasGisDepartment
-                                                self.logger.info(f"Saved {value} {state} has GIS department:" + str(hasGisDepartment))
+                                                self.logger.info(f"Saved {value} {state} has GIS department:" + str(hasGisDepartment))  ``
                                             except ValueError:
                                                 self.logger.error(f"Failed to parse has GIS department for {value} {state} ({hasGisDepartment})")
                                     except openai.APIConnectionError:
