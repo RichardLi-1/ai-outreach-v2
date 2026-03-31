@@ -550,6 +550,10 @@ class App:
                 entry.config(state="readonly")
                 entry.bind("<MouseWheel>", lambda _: "break")
                 entries[lbl_text] = entry
+
+            ttk.Label(right_frame, text="Empty columns will be created", foreground="gray", font=("TkDefaultFont", 7)).grid(
+                row=len(mapping_fields) + 1, column=0, columnspan=2, sticky=tk.W, pady=(0, 2)
+            )
             
             def on_run():
                 if check_vars[0].get() == 1:
@@ -679,33 +683,44 @@ class App:
         for column in df.columns:
             # Convert to string in case column name is numeric
             column_str = str(column) if not isinstance(column, str) else column
-            lower = column_str.lower()
-            normalized = ''.join(lower.split())
-            if "population" in lower:
+
+            # Normalize by removing whitespace and converting to lowercase
+            normalized = ''.join(column_str.lower().split())
+
+            # Match columns
+            _ALIASES = {
+                "County/City": ["county", "county/city", "city/county"],
+                "Email": ["email", "contactemail"],
+                "Phone Number": ["number", "phonenumber", "contactphonenumber", "contactnumber", "contactphone"],
+                "First Name": ["firstname", "contactfirstname", "first"],
+                "Last Name": ["lastname", "contactlastname", "last", "surname"],
+                "Role/Title": ["position", "role", "title", "role/title", "title/role", "jobtitle"],
+                "LinkedIn":     ["linkedin", "contactlinkedin", "linkedinprofile", "contactlinkedinprofile"],
+                "Outreach Message": ["contactlinkedinoutreachmessage", "linkedinoutreachmessage", "outreachmessage"],
+                "Email Domain": ["emaildomain"],
+            }
+
+            _COLUMN_MAP = {alias: canonical
+                        for canonical, aliases in _ALIASES.items()
+                        for alias in aliases
+            }
+
+            if "population" in normalized:
                 cols["Population"] = column
-            if lower in ["county", "county/city", "city/county"]:
-                cols["County/City"] = column
-            elif lower in ["email", "contact email"]:
-                cols["Email"] = column
-            elif lower in ["number", "phone number", "contact phone number", "contact number", "contact phone"]:
-                cols["Phone Number"] = column
-            elif lower in ["first name", "contact first name", "first"]:
-                cols["First Name"] = column
-            elif lower in ["last name", "contact last name", "last", "surname"]:
-                cols["Last Name"] = column
-            elif normalized in ["position", "role", "title", "role/title", "title/role", "jobtitle"]:
-                cols["Role/Title"] = column
             elif "contact" in normalized and ("state" in normalized or "province" in normalized):
                 cols["Contact State"] = column
             elif normalized in ["state", "province", "state/province", "province/state", "provinceorstate"] or "state" in normalized or "province" in normalized:
                 if "State" not in cols:  # Don't overwrite if we already have a state column from an exact match:
                     cols["State"] = column
+            elif normalized in _COLUMN_MAP:
+                cols[_COLUMN_MAP[normalized]] = column
             elif normalized in ["contactlinkedinprofile", "contactlinkedin", "linkedin", "linkedinprofile"] or "linkedin" in normalized:
                 cols["LinkedIn"] = column
             elif "contact" in normalized and "tag" in normalized:
                 cols["Contact Tag"] = column
             elif "tag" in normalized:
                 cols["Tag"] = column
+            
             if column is not None and str(column).strip() != "":
                 self.cols.append(column)
         return cols
@@ -919,22 +934,8 @@ class App:
                     #Read the data from cols returned by _detect_columns
                     for key in ["Population", "County/City", "Email", "Phone Number",
                                 "First Name", "Last Name", "Role/Title", "State",
-                                "LinkedIn", "Tag", "Contact Tag", "Contact State"]:
+                                "LinkedIn", "Tag", "Contact Tag", "Contact State", "Outreach Message", "Email Domain"]:
                         self.column_for[key] = cols.get(key)
-
-                    #self.column_for["Population"] = cols.get("Population")
-                    #self.column_for["County/City"] = cols.get("County/City")
-                    #self.column_for["Email"] = cols.get("Email")
-                    #self.column_for["Phone Number"] = cols.get("Phone Number")
-                    #self.column_for["First Name"] = cols.get("First Name")
-                    #self.column_for["Last Name"] = cols.get("Last Name")
-                    #self.column_for["Role/Title"] = cols.get("Role/Title")
-                    #self.column_for["State"] = cols.get("State")
-                    #self.column_for["LinkedIn"] = cols.get("LinkedIn")
-                    #self.column_for["Tag"] = cols.get("Tag")
-                    #self.column_for["Contact Tag"] = cols.get("Contact Tag")
-                    #self.column_for["Contact State"] = cols.get("Contact State")
-
 
                     # Read state value now so it can be shown in the role selection dialog
                     state_col = self.column_for.get("State")
@@ -986,8 +987,9 @@ class App:
                     df_original = df.copy()
 
                     def insert_if_missing(df, idx, col_name, default=""):
-                        if col_name.lower() not in [c.lower() for c in df.columns]:
+                        if col_name.lower() not in [c.lower() for c in df.columns] and not self.column_for[col_name]:
                             df.insert(idx, col_name, default)
+                            self.column_for[col_name] = col_name
 
                     for userChoice in userChoices:
                         df = df_original.copy()  # fresh copy so roles don't overwrite each other
@@ -1003,35 +1005,26 @@ class App:
                         if self.column_for["County/City"]:
                             self.logger.info("Looking for counties or cities under column: " + self.column_for["County/City"])
 
-                        insert_if_missing(df, len(df.columns), "Contact Tag")
-                        insert_if_missing(df, len(df.columns), "Email Domain")
-                        insert_if_missing(df, len(df.columns), "Source")
-                        insert_if_missing(df, len(df.columns), "Email Confidence")
-                        insert_if_missing(df, len(df.columns), "Alternative Email")
-                        insert_if_missing(df, len(df.columns), "Alternative Email Confidence")
-                        insert_if_missing(df, len(df.columns), "Hunter Email Source")
-                        
+                        all_cols = ["First Name",
+                                    "Last Name",
+                                    "Email",
+                                    "Phone Number",
+                                    "Role/Title",
+                                    "LinkedIn",
+                                    "Contact Tag",
+                                    "Contact State",
+                                    "Email Domain",
+                                    "Source",
+                                    "Email Confidence",
+                                    "Alternative Email",
+                                    "Alternative Email Confidence",
+                                    "Hunter Email Source"]          
 
                         #Prevents TypeErrors, clears stale output data
-                        for col in [
-                            self.column_for["First Name"],
-                            self.column_for["Last Name"],
-                            self.column_for["Email"],
-                            self.column_for["Phone Number"],
-                            self.column_for["Role/Title"],
-                            self.column_for["LinkedIn"],
-                            self.column_for["Contact Tag"],
-                            self.column_for["Contact State"],
-                            "Source",
-                            "Email Confidence",
-                            "Alternative Email",
-                            "Alternative Email Confidence",
-                            "Hunter Email Source",
-                            "Email Domain"
-                        ]:
-                            if col and col in df.columns:
-                                df[col] = ""
-                                #df[col] = df[col].astype("string")
+                        for col in all_cols:
+                            insert_if_missing(df, len(df.columns), col)
+                            if self.column_for[col] and self.column_for[col] in df.columns:
+                                df[self.column_for[col]] = ""
 
                         section_incomplete_notified = False
                         rows_before = stats["rows"]
@@ -1067,20 +1060,33 @@ class App:
                                     case Role.ASSESSOR:
                                         system_prompt = self.prompt_assessor
                                 
-                                if not df.loc[idx, self.column_for["Population"]]: #test this
+                                try:
+                                    state = df.loc[idx, self.column_for["State"]] if self.column_for.get("State") else ""
+                                    state = "" if pd.isna(state) else str(state)
+                                except Exception as e:
+                                    self.logger.error(f"Failed to get state for row {idx}: {str(e)}")
+                                    continue
+                                
+                                populationCell = df.loc[idx, self.column_for["Population"]]
+                                if pd.isna(populationCell) or populationCell == "" or populationCell == 0: #test this
                                     try:
-                                        population = openai_hunter_client.search(
-                                            f"{value} {state}".strip()
+                                        population = openai_hunter_client.search_misc(
+                                            f"{value} {state}".strip(),
+                                            SearchFor.POPULATION
                                         )
                                         self.logger.info(f"Found {value} {state} population:" + str(population))
-                                        df.loc[idx, self.column_for["Population"]] = population
+                                        population = population.replace(",", "").strip()
+                                        try:
+                                            int(population) #Check that OpenAI returned a valid number
+                                            df.loc[idx, self.column_for["Population"]] = population
+                                            self.logger.info(f"Saved {value} {state} population:" + str(population))
+                                        except ValueError:
+                                            self.logger.error(f"Failed to parse population for {value} {state} ({population})")
                                     except openai.APIConnectionError:
                                         raise
 
 
                                 try:
-                                    state = df.loc[idx, self.column_for["State"]] if self.column_for.get("State") else ""
-                                    state = "" if pd.isna(state) else str(state)
                                     info = openai_hunter_client.search(#                                                  ------------------OpenAI search for person---------------------
                                         f"{value} {state} Government".strip(),
                                         role,
