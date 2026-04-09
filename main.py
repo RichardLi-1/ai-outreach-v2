@@ -81,6 +81,8 @@ class App:
         self.output_path = None
         self.cols = []
 
+        self.generate_outreach_message = tk.BooleanVar(value=True)
+
         self.column_for = {}
         self.role_tags = {}
         self.dynamic_widgets = []
@@ -293,20 +295,25 @@ class App:
         canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
         scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         settings_window.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        
+        ttk.Checkbutton(
+            scroll_frame, text="Generate Outreach Message",
+            variable=self.generate_outreach_message
+        ).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 2))
 
-        ttk.Label(scroll_frame, text="GIS prompt").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 2))
+        ttk.Label(scroll_frame, text="GIS prompt").grid(row=1, column=0, sticky="w", padx=10, pady=(10, 2))
         gis_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        gis_prompt_box.grid(row=1, column=0, sticky="ew", padx=10)
+        gis_prompt_box.grid(row=2, column=0, sticky="ew", padx=10)
         gis_prompt_box.insert("1.0", self.prompt_gis)
 
-        ttk.Label(scroll_frame, text="Assessor prompt").grid(row=2, column=0, sticky="w", padx=10, pady=(10, 2))
+        ttk.Label(scroll_frame, text="Assessor prompt").grid(row=3, column=0, sticky="w", padx=10, pady=(10, 2))
         assessor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        assessor_prompt_box.grid(row=3, column=0, sticky="ew", padx=10)
+        assessor_prompt_box.grid(row=4, column=0, sticky="ew", padx=10)
         assessor_prompt_box.insert("1.0", self.prompt_assessor)
 
-        ttk.Label(scroll_frame, text="Mayor prompt").grid(row=4, column=0, sticky="w", padx=10, pady=(10, 2))
+        ttk.Label(scroll_frame, text="Mayor prompt").grid(row=5, column=0, sticky="w", padx=10, pady=(10, 2))
         mayor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        mayor_prompt_box.grid(row=5, column=0, sticky="ew", padx=10)
+        mayor_prompt_box.grid(row=6, column=0, sticky="ew", padx=10)
         mayor_prompt_box.insert("1.0", self.prompt_mayor)
 
         # Button bar fixed at bottom, outside scroll area
@@ -802,14 +809,13 @@ class App:
                                     "Contact Tag",
                                     "Contact State",
                                     "Has GIS Department",
-                                    "Address Data Owner / Department", #only clears for role=GIS
                                     "Contact LinkedIn Outreach Message",
+                                    "Address Data Owner / Department", #only clears for role=GIS
                                     "Email Domain",
-                                    "Source",
-                                    "Email Confidence",
-                                    "Alternative Email",
-                                    "Alternative Email Confidence",
-                                    "Hunter Email Source"]
+                                    "Source"]
+
+                    #if self.generate_outreach_message.get():
+                    #    OUTPUT_COLUMNS.append("Contact LinkedIn Outreach Message")
 
                     #Read the data from cols returned by _detect_columns
                     for key in ALL_MAPPED_COLUMNS:
@@ -888,9 +894,14 @@ class App:
                         #Fills in missing columns, prevents TypeErrors, and clears old data
                         for col in OUTPUT_COLUMNS:
                             insert_if_missing(df, len(df.columns), col)
-                            if self.column_for[col] and self.column_for[col] in df.columns:
-                                if col != "Address Data Owner / Department" or role == Role.GIS:
-                                    df[self.column_for[col]] = ""
+                            if self.column_for.get(col):
+                                if self.column_for[col] in df.columns:
+                                    if col != "Address Data Owner / Department" or role == Role.GIS:
+                                        df[self.column_for[col]] = ""
+
+                        for col in ["Email Confidence", "Alternative Email", "Alternative Email Confidence", "Hunter Email Source"]: #bandaid solution
+                            insert_if_missing(df, len(df.columns), col)
+                            df[col] = ""
 
                         section_incomplete_notified = False
                         rows_before = stats["rows"]
@@ -921,8 +932,8 @@ class App:
                                 match role:
                                     case Role.GIS:
                                         system_prompt = self.prompt_gis
-                                    case Role.MAYOR:
-                                        system_prompt = self.prompt_mayor
+                                    #case Role.MAYOR:
+                                    #    system_prompt = self.prompt_mayor
                                     case Role.ASSESSOR:
                                         system_prompt = self.prompt_assessor
                                 
@@ -1108,7 +1119,7 @@ class App:
                                             # Continue processing without finding alternative email
 
                                     #Generate LinkedIn Outreach Message
-                                    if first_name and last_name and parsedInfo.get("role"):
+                                    if self.generate_outreach_message.get() and first_name and last_name and parsedInfo.get("role"):
                                         try:
                                             linkedinOutreachMessage = openai_hunter_client.search_misc(
                                                 f"{value} {state}".strip(),
@@ -1125,7 +1136,7 @@ class App:
 
 
                                 except TypeError as e:
-                                    #This should not happen
+                                    #This typically will not happen due to checks
                                     self.logger.error("TypeError:" + str(e))
                                     self.logger.warning("You may be missing a row of data in the output.")
                                     if not section_incomplete_notified:
