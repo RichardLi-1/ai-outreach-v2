@@ -81,6 +81,7 @@ class App:
         self.output_path = None
         self.cols = []
 
+        self.search_population = tk.BooleanVar(value=True)
         self.generate_outreach_message = tk.BooleanVar(value=True)
         self.vector_store_id = None
 
@@ -302,24 +303,29 @@ class App:
             variable=self.generate_outreach_message
         ).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 2))
 
-        ttk.Label(scroll_frame, text="GIS prompt").grid(row=1, column=0, sticky="w", padx=10, pady=(10, 2))
-        gis_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        gis_prompt_box.grid(row=2, column=0, sticky="ew", padx=10)
-        gis_prompt_box.insert("1.0", self.prompt_gis)
-
-        ttk.Label(scroll_frame, text="Assessor prompt").grid(row=3, column=0, sticky="w", padx=10, pady=(10, 2))
-        assessor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        assessor_prompt_box.grid(row=4, column=0, sticky="ew", padx=10)
-        assessor_prompt_box.insert("1.0", self.prompt_assessor)
-
-        ttk.Label(scroll_frame, text="Mayor prompt").grid(row=5, column=0, sticky="w", padx=10, pady=(10, 2))
-        mayor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        mayor_prompt_box.grid(row=6, column=0, sticky="ew", padx=10)
-        mayor_prompt_box.insert("1.0", self.prompt_mayor)
+        ttk.Checkbutton(
+            scroll_frame, text="Search for Population",
+            variable=self.search_population
+        ).grid(row=1, column=0, sticky="w", padx=10, pady=(2, 2))
 
         # RAG document upload section
         rag_frame = ttk.LabelFrame(scroll_frame, text="Document RAG (Optional)")
-        rag_frame.grid(row=7, column=0, sticky="ew", padx=10, pady=(10, 2))
+        rag_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(10, 2))
+
+        ttk.Label(scroll_frame, text="GIS prompt").grid(row=3, column=0, sticky="w", padx=10, pady=(10, 2))
+        gis_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
+        gis_prompt_box.grid(row=4, column=0, sticky="ew", padx=10)
+        gis_prompt_box.insert("1.0", self.prompt_gis)
+
+        ttk.Label(scroll_frame, text="Assessor prompt").grid(row=5, column=0, sticky="w", padx=10, pady=(10, 2))
+        assessor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
+        assessor_prompt_box.grid(row=6, column=0, sticky="ew", padx=10)
+        assessor_prompt_box.insert("1.0", self.prompt_assessor)
+
+        ttk.Label(scroll_frame, text="Mayor prompt").grid(row=7, column=0, sticky="w", padx=10, pady=(10, 2))
+        mayor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
+        mayor_prompt_box.grid(row=8, column=0, sticky="ew", padx=10)
+        mayor_prompt_box.insert("1.0", self.prompt_mayor)
         rag_frame.columnconfigure(0, weight=1)
 
         rag_status = ttk.Label(
@@ -344,12 +350,19 @@ class App:
             def _upload():
                 try:
                     self.vector_store_id = openai_hunter_client.ingest_documents(list(paths), "Outreach Documents")
-                    self.root.after(0, lambda: rag_status.config(text=f"Vector store: {self.vector_store_id}"))
-                    self.root.after(0, lambda: clear_btn.config(state="normal"))
                     self.logger.info(f"Documents uploaded. Vector store ID: {self.vector_store_id}")
+                    def _on_success():
+                        if rag_status.winfo_exists():
+                            rag_status.config(text=f"Vector store: {self.vector_store_id}")
+                        if clear_btn.winfo_exists():
+                            clear_btn.config(state="normal")
+                    self.root.after(0, _on_success)
                 except Exception as e:
-                    self.root.after(0, lambda: rag_status.config(text="Upload failed"))
                     self.logger.error(f"Document upload failed: {e}")
+                    def _on_fail():
+                        if rag_status.winfo_exists():
+                            rag_status.config(text="Upload failed")
+                    self.root.after(0, _on_fail)
 
             threading.Thread(target=_upload, daemon=True).start()
 
@@ -989,24 +1002,25 @@ class App:
                                     self.logger.error(f"Failed to get state for row {idx}: {str(e)}")
                                     continue
                                 
-                                #Populate population cell
-                                populationCell = df.loc[idx, self.column_for["Population"]]
-                                if pd.isna(populationCell) or populationCell == "" or populationCell == 0:
-                                    try:
-                                        population = openai_hunter_client.search_misc(
-                                            f"{value} {state}".strip(),
-                                            SearchFor.POPULATION
-                                        )
-                                        self.logger.info(f"Found {value} {state} population:" + str(population))
-                                        population = population.replace(",", "").strip()
+                                if self.search_population.get():
+                                    #Populate population cell
+                                    populationCell = df.loc[idx, self.column_for["Population"]]
+                                    if pd.isna(populationCell) or populationCell == "" or populationCell == 0:
                                         try:
-                                            int(population) #Check that OpenAI returned a valid number
-                                            df.loc[idx, self.column_for["Population"]] = population
-                                            self.logger.info(f"Saved {value} {state} population:" + str(population))
-                                        except ValueError:
-                                            self.logger.error(f"Failed to parse population for {value} {state} ({population})")
-                                    except openai.APIConnectionError:
-                                        raise
+                                            population = openai_hunter_client.search_misc(
+                                                f"{value} {state}".strip(),
+                                                SearchFor.POPULATION
+                                            )
+                                            self.logger.info(f"Found {value} {state} population:" + str(population))
+                                            population = population.replace(",", "").strip()
+                                            try:
+                                                int(population) #Check that OpenAI returned a valid number
+                                                df.loc[idx, self.column_for["Population"]] = population
+                                                self.logger.info(f"Saved {value} {state} population:" + str(population))
+                                            except ValueError:
+                                                self.logger.error(f"Failed to parse population for {value} {state} ({population})")
+                                        except openai.APIConnectionError:
+                                            raise
                                 
                                 def populateColumn(parsedInfo):
                                     try:
@@ -1183,7 +1197,11 @@ class App:
                                     else:
                                         try:
                                             parsedInfo = json.loads(info)
-                                            populateColumn(parsedInfo)
+                                            try:
+                                                populateColumn(parsedInfo)
+                                                continue
+                                            except Exception as e:
+                                                self.logger.error(f"Failed to populate: {str(e)}")
                                         except json.JSONDecodeError:
                                             self.logger.info(f"RAG search returned non-JSON for row {idx} ({value}), falling back to OpenAI search.")
                                             
