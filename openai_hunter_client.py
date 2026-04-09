@@ -4,6 +4,7 @@ import requests
 from presets import Role, SearchFor
 import logging
 import re
+import json
 
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=settings.openai_api_key,
@@ -113,6 +114,51 @@ def verify_email(email):
     logger.info(response.json())
 
     return (response.status_code, response.json())
+
+
+def ingest_documents(file_paths, store_name):
+    files = [open(path, "rb") for path in file_paths]
+    vs = client.vector_stores.create(name=store_name)
+
+    try:
+        batch = client.vector_stores.file_batches.upload_and_poll(
+            vector_store_id=vs.id,
+            files=files
+        )
+    except Exception as e:
+        logger.error(f"Error during file ingestion: {e}")
+
+    finally:
+        for f in files:
+            f.close()
+
+    print(f"Vector store ID: {vs.id}")
+    print(f"Status: {batch.status}")
+    print(f"File counts: {batch.file_counts}")
+    return vs.id
+
+def query_rag(vs_id: str, county: str, state: str) -> str:
+    """Search the document. Returns a JSON string with firstName, lastName, email, phoneNumber, role, govWebsite, and confidence (0.0-1.0). Use this before falling back to web search."""
+    response = client.responses.create(
+        model="gpt-4o-mini",
+        instructions=settings.prompt_find_in_file,
+        input=f"{county}, {state}",
+        tools=[{
+            "type": "file_search",
+            "vector_store_ids": [vs_id]
+        }]
+    )
+    for item in response.output:
+        if item.type == "file_search_call":
+            logger.info(f"[RAG] file_search status: {item.status}")
+            if hasattr(item, 'results') and item.results:
+                for r in item.results:
+                    logger.info(f"[RAG] hit score={r.score:.3f} | {str(r.text)[:200]}")
+            else:
+                logger.warning("[RAG] file_search returned no results")
+    result = response.output_text
+    logger.info(f"[RAG] model output: {result}")
+    return result
 
 
 """

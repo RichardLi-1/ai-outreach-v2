@@ -82,6 +82,7 @@ class App:
         self.cols = []
 
         self.generate_outreach_message = tk.BooleanVar(value=True)
+        self.vector_store_id = None
 
         self.column_for = {}
         self.role_tags = {}
@@ -315,6 +316,52 @@ class App:
         mayor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
         mayor_prompt_box.grid(row=6, column=0, sticky="ew", padx=10)
         mayor_prompt_box.insert("1.0", self.prompt_mayor)
+
+        # RAG document upload section
+        rag_frame = ttk.LabelFrame(scroll_frame, text="Document RAG (Optional)")
+        rag_frame.grid(row=7, column=0, sticky="ew", padx=10, pady=(10, 2))
+        rag_frame.columnconfigure(0, weight=1)
+
+        rag_status = ttk.Label(
+            rag_frame,
+            text=f"Vector store: {self.vector_store_id}" if self.vector_store_id else "No documents uploaded"
+        )
+        rag_status.grid(row=0, column=0, sticky="w", padx=10, pady=(6, 2))
+
+        rag_btn_frame = ttk.Frame(rag_frame)
+        rag_btn_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(2, 8))
+
+        def upload_documents():
+            paths = filedialog.askopenfilenames(
+                title="Select Documents",
+                filetypes=[("Supported Files", "*.json *.pdf *.txt *.docx"), ("All Files", "*.*")],
+                parent=settings_window
+            )
+            if not paths:
+                return
+            rag_status.config(text="Uploading...")
+
+            def _upload():
+                try:
+                    self.vector_store_id = openai_hunter_client.ingest_documents(list(paths), "Outreach Documents")
+                    self.root.after(0, lambda: rag_status.config(text=f"Vector store: {self.vector_store_id}"))
+                    self.root.after(0, lambda: clear_btn.config(state="normal"))
+                    self.logger.info(f"Documents uploaded. Vector store ID: {self.vector_store_id}")
+                except Exception as e:
+                    self.root.after(0, lambda: rag_status.config(text="Upload failed"))
+                    self.logger.error(f"Document upload failed: {e}")
+
+            threading.Thread(target=_upload, daemon=True).start()
+
+        def clear_vector_store():
+            self.vector_store_id = None
+            rag_status.config(text="No documents uploaded")
+            clear_btn.config(state="disabled")
+
+        ttk.Button(rag_btn_frame, text="Upload Documents...", command=upload_documents).pack(side=tk.LEFT, padx=(0, 6))
+        clear_btn = ttk.Button(rag_btn_frame, text="Clear", command=clear_vector_store,
+                               state="normal" if self.vector_store_id else "disabled")
+        clear_btn.pack(side=tk.LEFT)
 
         # Button bar fixed at bottom, outside scroll area
         btn_frame = ttk.Frame(settings_window)
@@ -932,8 +979,6 @@ class App:
                                 match role:
                                     case Role.GIS:
                                         system_prompt = self.prompt_gis
-                                    #case Role.MAYOR:
-                                    #    system_prompt = self.prompt_mayor
                                     case Role.ASSESSOR:
                                         system_prompt = self.prompt_assessor
                                 
@@ -961,8 +1006,188 @@ class App:
                                         except ValueError:
                                             self.logger.error(f"Failed to parse population for {value} {state} ({population})")
                                     except openai.APIConnectionError:
-                                        raise                                
+                                        raise
+                                
+                                def populateColumn(parsedInfo):
+                                    try:
+                                        #Add the new name, email, role, phone number, and info source
+                                        df.loc[idx, self.column_for["First Name"]] = parsedInfo.get("firstName", "")
+                                        df.loc[idx, self.column_for["Last Name"]] = parsedInfo.get("lastName", "")
+                                        df.loc[idx, self.column_for["Email"]] = parsedInfo.get("email", "")
+                                        df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,+]", "", parsedInfo.get("phoneNumber", ""))
+                                        df.loc[idx, self.column_for["Role/Title"]] = parsedInfo.get("role", "")
+                                        df.loc[idx, "Email Domain"] = parsedInfo.get("emailDomain", "")
+                                        _tag, _contact_tag = self.role_tags.get(userChoice, (None, None))
+                                        df.loc[idx, self.column_for["Tag"]] = _tag
+                                        df.loc[idx, self.column_for["Contact Tag"]] = _contact_tag
+                                        if self.column_for.get("Source"):
+                                            df.loc[idx, self.column_for["Source"]] = parsedInfo.get("sourceWebsite", "")
 
+                                        if role == Role.GIS and self.column_for.get("Address Data Owner / Department"):
+                                            df.loc[idx, self.column_for["Address Data Owner / Department"]] = parsedInfo.get("addressDepartment", "")
+
+                                        state_mapping = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
+                                        
+                                        #Correct state format
+                                        if self.column_for.get("State"):
+                                            _raw_state = df.loc[idx, self.column_for["State"]]
+                                            thisState = str(_raw_state).strip().lower() if not pd.isna(_raw_state) else ""
+                                            if thisState and thisState in state_mapping:
+                                                df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState.lower())
+                                                if self.column_for.get("Contact State"):
+                                                    df.loc[idx, self.column_for["Contact State"]] = state_mapping.get(thisState.lower())
+                                            elif thisState and thisState[0:2] in state_mapping:
+                                                df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState[0:2].lower())
+                                                if self.column_for.get("Contact State"):
+                                                    df.loc[idx, self.column_for["Contact State"]] = state_mapping.get(thisState[0:2].lower())
+
+                                        reFind = False
+                                        email_val = parsedInfo.get("email")
+                                        email_type = parsedInfo.get("emailType")
+                                        incompleteEmailArtifacts = ["*", "protected", "info@", "contact@", "gis@", "assessor", "pa@", "ecta@", "administration", "admin@", "office@"]
+                                        if email_val and isinstance(email_val, str):
+                                            reFind = any([c in email_val.lower() for c in incompleteEmailArtifacts]) or email_val.lower() == "none" or email_type != "person"
+                                        verifyNeeded = bool(email_val) and email_type == "person" and email_val != "None" and not reFind
+                                        #Verify personal emails found
+                                        if verifyNeeded:
+                                            try:
+                                                res = openai_hunter_client.verify_email(email_val)
+                                                while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
+                                                    res = openai_hunter_client.verify_email(email_val)
+                                                    attempt_count += 1
+                                                if str(res[0]) == "200":
+                                                    verification_data = res[1].get("data")
+                                                    if verification_data:
+                                                        score = verification_data.get("score", -1)
+                                                        status = verification_data.get("status")
+                                                        sources = verification_data.get("sources", [])
+                                                        source = sources[0]["uri"] if sources else ""
+                                                        self.logger.info("Data found by hunter.io:")
+                                                        self.logger.info("Status: " + status)
+                                                        if score >= 0:
+                                                            self.logger.info("Score: " + str(score))
+                                                            df.loc[idx, "Email Confidence"] = str(score)
+                                                            df.loc[idx, "Hunter Email Source"] = source
+                                                            self.logger.info("Source: " +  source)
+                                                            if score < 80:
+                                                                reFind = True
+                                                                self.logger.info("Confidence score is too low, attempting to search again")
+                                                    else:
+                                                        self.logger.error("Hunter.io did not return data")
+                                                        
+                                                elif str(res[0]) == "400":
+                                                    errors = res[1].get("errors") or []
+                                                    if errors and errors[0].get("id") == "invalid_email":
+                                                        reFind = True
+                                                else:
+                                                    self.logger.warning("Hunter.io Verify API Call Failed")
+                                            except Exception as e:
+                                                self.logger.warning(f"Hunter.io verify_email API error (skipping): {str(e)}")
+                                                # Continue processing without verification
+
+                                        #Search for personal email if department email or no email was returned
+                                        first_name = parsedInfo.get("firstName")
+                                        last_name = parsedInfo.get("lastName")
+                                        gov_site = parsedInfo.get("govWebsite")
+                                        if (not verifyNeeded or reFind) and first_name and last_name and first_name.lower() not in ["none", "gis", "tax", "appraiser"] and last_name.lower() not in ["none", "gis", "tax", "team", "appraiser"] and gov_site:
+                                            try:
+                                                res = openai_hunter_client.find_email(first_name, last_name, gov_site)
+                                                attempt_count = 1
+                                                while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
+                                                    res = openai_hunter_client.find_email(first_name, last_name, gov_site)
+                                                    attempt_count += 1
+                                                if str(res[0]) == "200":
+                                                    parsedHunterResponse = res[1].get("data")
+                                                    if parsedHunterResponse:
+                                                        email = parsedHunterResponse.get("email")
+                                                        if email is not None:
+                                                            score = parsedHunterResponse["score"]
+                                                            sources = parsedHunterResponse.get("sources", [])
+                                                            number = parsedHunterResponse.get("phone_number")
+                                                            linkedin = parsedHunterResponse.get("linkedin_url")
+                                                            source = sources[0]["uri"] if sources else ""
+                                                            self.logger.info("Data found by hunter.io:")
+                                                            self.logger.info("email: " + email)
+                                                            self.logger.info("score: " + str(score))
+                                                            self.logger.info("source: " + source)
+                                                            if (reFind and score >= 90) or (not pd.isna(df.loc[idx, "Email Confidence"]) and str(df.loc[idx, "Email Confidence"]).strip() != "" and score > int(df.loc[idx, "Email Confidence"])) or pd.isna(df.loc[idx, self.column_for["Email"]]) or df.loc[idx, self.column_for["Email"]] == "" or df.loc[idx, self.column_for["Email"]] == 0:
+                                                                self.logger.info(f"Saving hunter.io email {email} to email column, moving original email to Alternative Email column")
+                                                                df.loc[idx, "Alternative Email"] = df.loc[idx, self.column_for["Email"]]
+                                                                df.loc[idx, "Alternative Email Confidence"] = df.loc[idx, "Email Confidence"]   
+                                                                df.loc[idx, self.column_for["Email"]] = email
+                                                                df.loc[idx, "Email Confidence"] = str(score)
+                                                                df.loc[idx, "Hunter Email Source"] = source
+                                                                df.loc[idx, self.column_for["LinkedIn"]] = linkedin
+                                                                if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
+                                                                    df.loc[idx, self.column_for["Phone Number"]] = number
+                                                            elif score>=70:
+                                                                self.logger.info(f"Saving hunter.io email {email} to Alternative Email column")
+                                                                df.loc[idx, "Alternative Email"] = email
+                                                                df.loc[idx, "Alternative Email Confidence"] = str(score)
+                                                                df.loc[idx, "Hunter Email Source"] = source
+                                                                df.loc[idx, self.column_for["LinkedIn"]] = linkedin
+                                                                if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
+                                                                    df.loc[idx, self.column_for["Phone Number"]] = number
+                                                            else:
+                                                                self.logger.info(f"Hunter.io email score less than 70, too low to save ({score}): {email}")
+                                                        else:
+                                                            self.logger.info("Hunter.io did not find an email for " + first_name + " " + last_name)
+                                                    else:
+                                                        self.logger.error("Hunter.io did not return data")
+                                                else:
+                                                    self.logger.info("Hunter.io Find API Call Failed")
+                                            except Exception as e:
+                                                self.logger.warning(f"Hunter.io find_email API error (skipping): {str(e)}")
+                                                # Continue processing without finding alternative email
+
+                                        #Generate LinkedIn Outreach Message
+                                        if self.generate_outreach_message.get() and first_name and last_name and parsedInfo.get("role"):
+                                            try:
+                                                linkedinOutreachMessage = openai_hunter_client.search_misc(
+                                                    f"{value} {state}".strip(),
+                                                    SearchFor.OUTREACH_MESSAGE,
+                                                    f"{first_name} {last_name}",
+                                                    role,
+                                                    f"{value} {state}"
+                                                )
+                                                if linkedinOutreachMessage:
+                                                    df.loc[idx, self.column_for["Contact LinkedIn Outreach Message"]] = linkedinOutreachMessage
+                                                    self.logger.info(f"Generated and saved {value} {state} linkedinOutreachMessage:" + str(linkedinOutreachMessage))
+                                            except openai.APIConnectionError:
+                                                raise
+
+
+                                    except TypeError as e:
+                                        #This typically will not happen due to checks
+                                        self.logger.error("TypeError:" + str(e))
+                                        self.logger.warning("You may be missing a row of data in the output.")
+                                        if not section_incomplete_notified:
+                                            section_incomplete_notified = True
+                                            self.root.after(0, lambda n=name, tag=tag_str: messagebox.showwarning(
+                                                "Incomplete Data",
+                                                f"Data is incomplete for section '{n}' ({tag}) and must be rerun."
+                                            ))                                
+
+                                if self.vector_store_id:#                                                            ------------------RAG search for person---------------------
+                                    try:
+                                        info = openai_hunter_client.query_rag(self.vector_store_id, value, state)
+                                    except openai.APIConnectionError:
+                                        raise
+                                    except Exception as e:
+                                        self.logger.error(f"RAG search failed for row {idx} ({value}): {str(e)}")
+                                        info = None
+
+                                    info = (info or "").strip()
+                                    if not info or info == "None" or info is None:  #RAG search failed
+                                        self.logger.info(f"No RAG results for row {idx} ({value}), falling back to OpenAI search.")
+                                    else:
+                                        try:
+                                            parsedInfo = json.loads(info)
+                                            populateColumn(parsedInfo)
+                                        except json.JSONDecodeError:
+                                            self.logger.info(f"RAG search returned non-JSON for row {idx} ({value}), falling back to OpenAI search.")
+                                            
+                                    
 
                                 try:
                                     info = openai_hunter_client.search(#                                             ------------------OpenAI search for person---------------------
@@ -986,165 +1211,9 @@ class App:
                                 except json.JSONDecodeError:
                                     self.logger.info(f"OpenAI returned non-JSON for row {idx} ({value}), skipping.")
                                     continue
-
-                                try:
-                                    #Add the new name, email, role, phone number, and info source
-                                    df.loc[idx, self.column_for["First Name"]] = parsedInfo.get("firstName", "")
-                                    df.loc[idx, self.column_for["Last Name"]] = parsedInfo.get("lastName", "")
-                                    df.loc[idx, self.column_for["Email"]] = parsedInfo.get("email", "")
-                                    df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,+]", "", parsedInfo.get("phoneNumber", ""))
-                                    df.loc[idx, self.column_for["Role/Title"]] = parsedInfo.get("role", "")
-                                    df.loc[idx, "Email Domain"] = parsedInfo.get("emailDomain", "")
-                                    _tag, _contact_tag = self.role_tags.get(userChoice, (None, None))
-                                    df.loc[idx, self.column_for["Tag"]] = _tag
-                                    df.loc[idx, self.column_for["Contact Tag"]] = _contact_tag
-                                    if self.column_for.get("Source"):
-                                        df.loc[idx, self.column_for["Source"]] = parsedInfo.get("sourceWebsite", "")
-
-                                    if role == Role.GIS and self.column_for.get("Address Data Owner / Department"):
-                                        df.loc[idx, self.column_for["Address Data Owner / Department"]] = parsedInfo.get("addressDepartment", "")
-
-                                    state_mapping = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
-                                    
-                                    #Correct state format
-                                    if self.column_for.get("State"):
-                                        _raw_state = df.loc[idx, self.column_for["State"]]
-                                        thisState = str(_raw_state).strip().lower() if not pd.isna(_raw_state) else ""
-                                        if thisState and thisState in state_mapping:
-                                            df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState.lower())
-                                            if self.column_for.get("Contact State"):
-                                                df.loc[idx, self.column_for["Contact State"]] = state_mapping.get(thisState.lower())
-                                        elif thisState and thisState[0:2] in state_mapping:
-                                            df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState[0:2].lower())
-                                            if self.column_for.get("Contact State"):
-                                                df.loc[idx, self.column_for["Contact State"]] = state_mapping.get(thisState[0:2].lower())
-
-                                    reFind = False
-                                    email_val = parsedInfo.get("email")
-                                    email_type = parsedInfo.get("emailType")
-                                    incompleteEmailArtifacts = ["*", "protected", "info@", "contact@", "gis@", "assessor", "pa@", "ecta@", "administration", "admin@", "office@"]
-                                    if email_val and isinstance(email_val, str):
-                                        reFind = any([c in email_val.lower() for c in incompleteEmailArtifacts]) or email_val.lower() == "none" or email_type != "person"
-                                    verifyNeeded = bool(email_val) and email_type == "person" and email_val != "None" and not reFind
-                                    #Verify personal emails found
-                                    if verifyNeeded:
-                                        try:
-                                            res = openai_hunter_client.verify_email(email_val)
-                                            while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
-                                                res = openai_hunter_client.verify_email(email_val)
-                                                attempt_count += 1
-                                            if str(res[0]) == "200":
-                                                verification_data = res[1].get("data")
-                                                if verification_data:
-                                                    score = verification_data.get("score", -1)
-                                                    status = verification_data.get("status")
-                                                    sources = verification_data.get("sources", [])
-                                                    source = sources[0]["uri"] if sources else ""
-                                                    self.logger.info("Data found by hunter.io:")
-                                                    self.logger.info("Status: " + status)
-                                                    if score >= 0:
-                                                        self.logger.info("Score: " + str(score))
-                                                        df.loc[idx, "Email Confidence"] = str(score)
-                                                        df.loc[idx, "Hunter Email Source"] = source
-                                                        self.logger.info("Source: " +  source)
-                                                        if score < 80:
-                                                            reFind = True
-                                                            self.logger.info("Confidence score is too low, attempting to search again")
-                                                else:
-                                                    self.logger.error("Hunter.io did not return data")
-                                                    
-                                            elif str(res[0]) == "400":
-                                                errors = res[1].get("errors") or []
-                                                if errors and errors[0].get("id") == "invalid_email":
-                                                    reFind = True
-                                            else:
-                                                self.logger.warning("Hunter.io Verify API Call Failed")
-                                        except Exception as e:
-                                            self.logger.warning(f"Hunter.io verify_email API error (skipping): {str(e)}")
-                                            # Continue processing without verification
-
-                                    #Search for personal email if department email or no email was returned
-                                    first_name = parsedInfo.get("firstName")
-                                    last_name = parsedInfo.get("lastName")
-                                    gov_site = parsedInfo.get("govWebsite")
-                                    if (not verifyNeeded or reFind) and first_name and last_name and first_name.lower() not in ["none", "gis", "tax", "appraiser"] and last_name.lower() not in ["none", "gis", "tax", "team", "appraiser"] and gov_site:
-                                        try:
-                                            res = openai_hunter_client.find_email(first_name, last_name, gov_site)
-                                            attempt_count = 1
-                                            while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
-                                                res = openai_hunter_client.find_email(first_name, last_name, gov_site)
-                                                attempt_count += 1
-                                            if str(res[0]) == "200":
-                                                parsedHunterResponse = res[1].get("data")
-                                                if parsedHunterResponse:
-                                                    email = parsedHunterResponse.get("email")
-                                                    if email is not None:
-                                                        score = parsedHunterResponse["score"]
-                                                        sources = parsedHunterResponse.get("sources", [])
-                                                        number = parsedHunterResponse.get("phone_number")
-                                                        linkedin = parsedHunterResponse.get("linkedin_url")
-                                                        source = sources[0]["uri"] if sources else ""
-                                                        self.logger.info("Data found by hunter.io:")
-                                                        self.logger.info("email: " + email)
-                                                        self.logger.info("score: " + str(score))
-                                                        self.logger.info("source: " + source)
-                                                        if (reFind and score >= 90) or (not pd.isna(df.loc[idx, "Email Confidence"]) and str(df.loc[idx, "Email Confidence"]).strip() != "" and score > int(df.loc[idx, "Email Confidence"])) or pd.isna(df.loc[idx, self.column_for["Email"]]) or df.loc[idx, self.column_for["Email"]] == "" or df.loc[idx, self.column_for["Email"]] == 0:
-                                                            self.logger.info(f"Saving hunter.io email {email} to email column, moving original email to Alternative Email column")
-                                                            df.loc[idx, "Alternative Email"] = df.loc[idx, self.column_for["Email"]]
-                                                            df.loc[idx, "Alternative Email Confidence"] = df.loc[idx, "Email Confidence"]   
-                                                            df.loc[idx, self.column_for["Email"]] = email
-                                                            df.loc[idx, "Email Confidence"] = str(score)
-                                                            df.loc[idx, "Hunter Email Source"] = source
-                                                            df.loc[idx, self.column_for["LinkedIn"]] = linkedin
-                                                            if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
-                                                                df.loc[idx, self.column_for["Phone Number"]] = number
-                                                        elif score>=70:
-                                                            self.logger.info(f"Saving hunter.io email {email} to Alternative Email column")
-                                                            df.loc[idx, "Alternative Email"] = email
-                                                            df.loc[idx, "Alternative Email Confidence"] = str(score)
-                                                            df.loc[idx, "Hunter Email Source"] = source
-                                                            df.loc[idx, self.column_for["LinkedIn"]] = linkedin
-                                                            if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
-                                                                df.loc[idx, self.column_for["Phone Number"]] = number
-                                                        else:
-                                                            self.logger.info(f"Hunter.io email score less than 70, too low to save ({score}): {email}")
-                                                    else:
-                                                        self.logger.info("Hunter.io did not find an email for " + first_name + " " + last_name)
-                                                else:
-                                                    self.logger.error("Hunter.io did not return data")
-                                            else:
-                                                self.logger.info("Hunter.io Find API Call Failed")
-                                        except Exception as e:
-                                            self.logger.warning(f"Hunter.io find_email API error (skipping): {str(e)}")
-                                            # Continue processing without finding alternative email
-
-                                    #Generate LinkedIn Outreach Message
-                                    if self.generate_outreach_message.get() and first_name and last_name and parsedInfo.get("role"):
-                                        try:
-                                            linkedinOutreachMessage = openai_hunter_client.search_misc(
-                                                f"{value} {state}".strip(),
-                                                SearchFor.OUTREACH_MESSAGE,
-                                                f"{first_name} {last_name}",
-                                                role,
-                                                f"{value} {state}"
-                                            )
-                                            if linkedinOutreachMessage:
-                                                df.loc[idx, self.column_for["Contact LinkedIn Outreach Message"]] = linkedinOutreachMessage
-                                                self.logger.info(f"Generated and saved {value} {state} linkedinOutreachMessage:" + str(linkedinOutreachMessage))
-                                        except openai.APIConnectionError:
-                                            raise
-
-
-                                except TypeError as e:
-                                    #This typically will not happen due to checks
-                                    self.logger.error("TypeError:" + str(e))
-                                    self.logger.warning("You may be missing a row of data in the output.")
-                                    if not section_incomplete_notified:
-                                        section_incomplete_notified = True
-                                        self.root.after(0, lambda n=name, tag=tag_str: messagebox.showwarning(
-                                            "Incomplete Data",
-                                            f"Data is incomplete for section '{n}' ({tag}) and must be rerun."
-                                        ))
+                                
+                                
+                                populateColumn(parsedInfo)
 
                         except Exception as e:
                             self.logger.error("Error: " + str(e))
