@@ -46,7 +46,6 @@ class TextHandler(logging.Handler):
         self.text_widget.insert(tk.END, msg + "\n")
         self.text_widget.see(tk.END)
         self.text_widget.config(state="disabled")
-        self.text_widget.update_idletasks()
         
 
 class App:
@@ -243,24 +242,21 @@ class App:
         if self._settings_visible:
             self._settings_frame.pack_forget()
             self._settings_visible = False
-            # Restore previous width
-            if hasattr(self, '_pre_settings_width'):
-                h = self.root.winfo_height()
-                self.root.geometry(f"{self._pre_settings_width}x{h}")
+            # Let tkinter auto-resize back to fit content
+            self.root.geometry("")
         else:
             # Build settings widgets on first open (lazy init for performance)
             if not self._settings_built:
                 self._build_settings_panel(self._settings_frame)
                 self._settings_built = True
-            # Remember current width, then expand
-            self._pre_settings_width = self.root.winfo_width()
             self._settings_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
             self._settings_visible = True
+            # Temporarily set width so settings panel fits, then clear to restore auto-resize
             self.root.update_idletasks()
             needed = self._main_frame.winfo_reqwidth() + self._settings_frame.winfo_reqwidth() + 20
-            h = self.root.winfo_height()
             w = max(self.root.winfo_width(), needed)
-            self.root.geometry(f"{w}x{h}")
+            self.root.geometry(f"{w}x{self.root.winfo_height()}")
+            self.root.after(50, lambda: self.root.geometry(""))
 
     def _build_settings_panel(self, parent):
         """Build inline settings content inside the given frame."""
@@ -270,8 +266,9 @@ class App:
         inner = ttk.Frame(canvas)
 
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(inner_id, width=e.width))
 
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -495,7 +492,7 @@ class App:
         self.prompt_outreach = self._outreach_prompt_box.get("1.0", tk.END).strip()
         settings.prompt_find_outreach_message = self.prompt_outreach
 
-    def select_role_to_search(self, section_name, sheet_name, run_id, state_val="unknown", sections_remaining=0):
+    def select_role_to_search(self, section_name, sheet_name, run_id, state_val="unknown", sections_remaining=0, section_names=None, section_states=None):
         result = threading.Event()
         self.current_result_event = result
         role_choice_value = [0]
@@ -615,8 +612,26 @@ class App:
                 textvariable=sheet_action_label,
                 variable=sheet_action_var
             )
-            sheet_action_cb.pack(pady=(14, 3), anchor=tk.W)
-            sheet_action_cb.config(state="disabled")
+            if sections_remaining > 0:
+                sheet_action_cb.pack(pady=(14, 3), anchor=tk.W)
+                sheet_action_cb.config(state="disabled")
+
+            # Section list for multi-section sheets
+            if section_names and len(section_names) > 1:
+                display_sheet = re.sub(r"_part(\d+)$", lambda m: f" Part {m.group(1)}", sheet_name)
+                sec_frame = ttk.Frame(left_frame)
+                sec_frame.pack(anchor=tk.W, pady=(10, 0))
+                ttk.Label(sec_frame, text=display_sheet, font=("TkDefaultFont", 9, "underline")).pack(anchor=tk.W)
+                _sec_states = section_states or {}
+                for sn in section_names:
+                    display_sn = re.sub(r"_part(\d+)$", lambda m: f" Part {m.group(1)}", sn)
+                    sec_state = _sec_states.get(sn)
+                    if sec_state:
+                        display_sn += f" ({sec_state})"
+                    is_current = (sn == section_name)
+                    font = ("TkDefaultFont", 8, "bold") if is_current else ("TkDefaultFont", 8)
+                    prefix = "\u25b6 " if is_current else "   "
+                    ttk.Label(sec_frame, text=f"{prefix}{display_sn}", font=font, foreground="" if is_current else "gray").pack(anchor=tk.W, padx=(4, 0))
 
             # Right side: column mapping grid
             right_frame = ttk.Frame(container)
@@ -919,7 +934,24 @@ class App:
                                 ),
                             ))
                         try:
-                            userChoices = self.select_role_to_search(name, sheet_name, run_id, state_val, total_sections - section_idx + 1)
+                            section_names = [sn for sn, _ in sections]
+                            _state_map = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
+                            section_states = {}
+                            for sn, sdf in sections:
+                                sec_cols, _ = utilities._detect_columns(sdf)
+                                sc = sec_cols.get("State")
+                                if sc and sc in sdf.columns:
+                                    nonnull = sdf[sc].dropna()
+                                    nonnull = nonnull[nonnull.astype(str).str.strip() != ""]
+                                    if not nonnull.empty:
+                                        sv = str(nonnull.iloc[0]).strip()
+                                        nv = _state_map.get(sv.lower(), None) or _state_map.get(sv.lower()[0:2], sv)
+                                        if " – " in nv:
+                                            sv = nv.split(" – ")[0].strip()
+                                        else:
+                                            sv = nv
+                                        section_states[sn] = sv
+                            userChoices = self.select_role_to_search(name, sheet_name, run_id, state_val, total_sections - section_idx + 1, section_names=section_names, section_states=section_states)
                         except TypeError:
                             self.logger.error("Invalid input, only 1, 2, or 3 accepted")
                         except ValueError:
@@ -988,7 +1020,7 @@ class App:
                                     continue
 
                                 # Skip if county/city value is blank or matches header
-                                if pd.isna(value) or str(value).strip() == "" or value == self.column_for["County/City"]:
+                                if utilities.is_blank(value) or value == self.column_for["County/City"]:
                                     continue
 
                                 self.logger.info("Currently on: " + str(value))
@@ -1005,16 +1037,14 @@ class App:
                                 
                                 try:
                                     state = df.loc[idx, self.column_for["State"]] if self.column_for.get("State") else ""
-                                    state = "" if pd.isna(state) else str(state)
+                                    state = "" if utilities.is_blank(state) else str(state)
                                 except Exception as e:
                                     self.logger.error(f"Failed to get state for row {idx}: {str(e)}")
                                     continue
                                 
-                                def cellIsEmpty(cell):
-                                    return pd.isna(cell) or cell == 0 or str(cell).strip() == ""
 
                                 #if the user has selected to search for population and the population cell is empty, attempt to fill it
-                                if self.search_population.get() and cellIsEmpty(df.loc[idx, self.column_for["Population"]]): 
+                                if self.search_population.get() and utilities._cell_is_empty(df.loc[idx, self.column_for["Population"]]): 
                                     try:
                                         population = openai_client.search_misc(
                                             f"{value} {state}".strip(),
@@ -1054,7 +1084,7 @@ class App:
                                         #Correct state format
                                         if self.column_for.get("State"):
                                             _raw_state = df.loc[idx, self.column_for["State"]]
-                                            thisState = str(_raw_state).strip().lower() if not pd.isna(_raw_state) else ""
+                                            thisState = str(_raw_state).strip().lower() if not utilities.is_blank(_raw_state) else ""
                                             if thisState and thisState in state_mapping:
                                                 df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState.lower())
                                                 if self.column_for.get("Contact State"):
@@ -1133,7 +1163,7 @@ class App:
                                                             self.logger.info("email: " + email)
                                                             self.logger.info("score: " + str(score))
                                                             self.logger.info("source: " + source)
-                                                            if (reFind and score >= 90) or (not pd.isna(df.loc[idx, "Email Confidence"]) and str(df.loc[idx, "Email Confidence"]).strip() != "" and score > int(df.loc[idx, "Email Confidence"])) or pd.isna(df.loc[idx, self.column_for["Email"]]) or df.loc[idx, self.column_for["Email"]] == "" or df.loc[idx, self.column_for["Email"]] == 0:
+                                                            if (reFind and score >= 90) or (not utilities.is_blank(df.loc[idx, "Email Confidence"]) and score > int(df.loc[idx, "Email Confidence"])) or utilities._cell_is_empty(df.loc[idx, self.column_for["Email"]]):
                                                                 self.logger.info(f"Saving hunter.io email {email} to email column, moving original email to Alternative Email column")
                                                                 df.loc[idx, "Alternative Email"] = df.loc[idx, self.column_for["Email"]]
                                                                 df.loc[idx, "Alternative Email Confidence"] = df.loc[idx, "Email Confidence"]   
@@ -1141,7 +1171,7 @@ class App:
                                                                 df.loc[idx, "Email Confidence"] = str(score)
                                                                 df.loc[idx, "Hunter Email Source"] = source
                                                                 df.loc[idx, self.column_for["LinkedIn"]] = linkedin
-                                                                if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
+                                                                if utilities._cell_is_empty(df.loc[idx, self.column_for["Phone Number"]]) and number != 0 and number is not None:
                                                                     df.loc[idx, self.column_for["Phone Number"]] = number
                                                             elif score>=70:
                                                                 self.logger.info(f"Saving hunter.io email {email} to Alternative Email column")
@@ -1149,7 +1179,7 @@ class App:
                                                                 df.loc[idx, "Alternative Email Confidence"] = str(score)
                                                                 df.loc[idx, "Hunter Email Source"] = source
                                                                 df.loc[idx, self.column_for["LinkedIn"]] = linkedin
-                                                                if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
+                                                                if utilities._cell_is_empty(df.loc[idx, self.column_for["Phone Number"]]) and number != 0 and number is not None:
                                                                     df.loc[idx, self.column_for["Phone Number"]] = number
                                                             else:
                                                                 self.logger.info(f"Hunter.io email score less than 70, too low to save ({score}): {email}")
@@ -1164,7 +1194,7 @@ class App:
                                                 # Continue processing without finding alternative email
 
                                         #Generate LinkedIn Outreach Message
-                                        if self.generate_outreach_message.get() and first_name and last_name and parsedInfo.get("role"):
+                                        if self.generate_outreach_message.get() and first_name and last_name and parsedInfo.get("role") and parsedInfo["role"].lower() != "none":
                                             try:
                                                 linkedinOutreachMessage = openai_client.search_misc(
                                                     f"{first_name} {last_name}, {parsedInfo['role']}, at {state}".strip(),
@@ -1172,7 +1202,7 @@ class App:
                                                 )
                                                 if linkedinOutreachMessage:
                                                     df.loc[idx, self.column_for["Contact LinkedIn Outreach Message"]] = linkedinOutreachMessage
-                                                    self.logger.info(f"Generated and saved {parsedInfo['role']} {state} linkedinOutreachMessage:" + str(linkedinOutreachMessage))
+                                                    self.logger.info(f"Generated and saved {parsedInfo['role']} {state} linkedinOutreachMessage: " + str(linkedinOutreachMessage))
                                             except openai.APIConnectionError:
                                                 raise
 
@@ -1198,7 +1228,7 @@ class App:
                                         info = None
 
                                     info = (info or "").strip()
-                                    if not info or info == "None" or info is None:  #RAG search failed
+                                    if utilities.is_none_response(info):  #RAG search failed
                                         self.logger.info(f"No RAG results for row {idx} ({value}), falling back to OpenAI search.")
                                     else:
                                         try:
@@ -1227,7 +1257,7 @@ class App:
                                     continue
 
                                 info = (info or "").strip()
-                                if not info or info == "None" or info is None:
+                                if utilities.is_none_response(info):
                                     continue
 
                                 try:

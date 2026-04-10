@@ -23,6 +23,7 @@ from datetime import datetime
 
 # Reuse existing clients
 import openai_client
+from utilities import is_blank, extract_domain, extract_domain_from_text
 
 MERGED_FILE = Path(r"C:\dev\ai-outreach\merged_split_hunter_leap2026 contact list_20260316_155137_20260316_160246_20260316_203518.xlsx")
 LEAP_FILE   = Path(r"C:\dev\ai-outreach\leap2026 contact list.xlsx")
@@ -33,34 +34,7 @@ def normalize_name(s):
     """Lowercase, strip whitespace/non-breaking spaces for matching."""
     return re.sub(r"\s+", " ", str(s).replace("\xa0", " ").replace("\u200b", "").strip()).lower()
 
-def extract_domain(val):
-    if not val or (isinstance(val, float) and pd.isna(val)):
-        return None
-    s = str(val).strip()
-    s = re.sub(r"^https?://", "", s)
-    s = re.sub(r"^www\.", "", s)
-    s = s.split("/")[0].split("?")[0].split("#")[0]
-    return s if "." in s and " " not in s.strip() else None
-
-def extract_domain_from_text(text):
-    """Extract a bare domain from verbose OpenAI prose (e.g. '...is wake.gov...')."""
-    if not text:
-        return None
-    # Try to find a domain pattern like word.tld or word.word.tld
-    matches = re.findall(r'\b([a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?)+)\b', text.lower())
-    # Filter out things that aren't real domains (must have a proper TLD)
-    tlds = {
-        "gov", "com", "org", "net", "edu", "ca", "uk", "au", "us", "info",
-        "io", "co", "mil", "int", "biz", "nz", "de", "fr", "jp", "ch",
-    }
-    for m in matches:
-        parts = m.split(".")
-        if len(parts) >= 2 and parts[-1] in tlds:
-            return m
-    return None
-
-def is_blank(val):
-    return val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() in ("", "nan", "NaN")
+# extract_domain, extract_domain_from_text, is_blank imported from utilities
 
 # ── load files ────────────────────────────────────────────────────────────────
 

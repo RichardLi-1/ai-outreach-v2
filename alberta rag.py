@@ -1,6 +1,7 @@
 import pandas as pd
 import openai_client
 import hunter_client
+import utilities
 import json
 from presets import Role, stateCorrectionMap
 from datetime import datetime
@@ -62,7 +63,6 @@ class TextHandler(logging.Handler):
         self.text_widget.insert(tk.END, msg + "\n")
         self.text_widget.see(tk.END)
         self.text_widget.config(state="disabled")
-        self.text_widget.update_idletasks()
         
 
 class App:
@@ -588,134 +588,15 @@ class App:
         self.root.mainloop()
 
     def _detect_columns(self, df):
-        cols = {}
-        self.cols = []
-        for column in df.columns:
-            # Convert to string in case column name is numeric
-            column_str = str(column) if not isinstance(column, str) else column
-            lower = column_str.lower()
-            normalized = ''.join(lower.split())
-            if lower in ["county", "county/city", "city/county"]:
-                cols["County/City"] = column
-            elif lower in ["email", "contact email"]:
-                cols["Email"] = column
-            elif lower in ["number", "phone number", "contact phone number", "contact number", "contact phone"]:
-                cols["Phone Number"] = column
-            elif lower in ["first name", "contact first name", "first"]:
-                cols["First Name"] = column
-            elif lower in ["last name", "contact last name", "last", "surname"]:
-                cols["Last Name"] = column
-            elif normalized in ["position", "role", "title", "role/title", "title/role"]:
-                cols["Role/Title"] = column
-            elif normalized in ["state", "province", "state/province", "province/state", "provinceorstate"] or "state" in normalized or "province" in normalized:
-                if "State" not in cols:  # Don't overwrite if we already have a state column from an exact match:
-                    cols["State"] = column
-            elif normalized in ["contactlinkedinprofile", "contactlinkedin", "linkedin", "linkedinprofile"] or "linkedin" in normalized:
-                cols["LinkedIn"] = column
-            elif normalized in ["tag"]:
-                cols["Tag"] = column
-            elif normalized in ["contacttag"]:
-                cols["Contact Tag"] = column
-            if column is not None and str(column).strip() != "":
-                self.cols.append(column)
+        cols, col_list = utilities._detect_columns(df)
+        self.cols = col_list
         return cols
 
     def _find_duplicate_headers(self, df):
-        """
-        Find rows that look like header rows (indicating stacked datasets).
-        Returns a list of row indices where headers are found.
-        """
-        header_rows = []
-
-        # Keywords commonly found in headers (single words only for whole-word matching)
-        header_keywords = ['country', 'county', 'city', 'email', 'state', 'province',
-                          'contact', 'population', 'phone', 'role', 'title', 'name',
-                          'first', 'last', 'position', 'address']
-
-        for idx in range(len(df)):
-            row = df.iloc[idx]
-            # Convert all values in the row to lowercase strings
-            row_values = [str(val).lower().strip() for val in row if pd.notna(val) and str(val).strip()]
-
-            # Count how many header keywords appear in this row
-            # A cell is a header cell if MOST of its words are keywords
-            keyword_matches = 0
-            for val in row_values:
-                # Split into words
-                val_words = val.replace('/', ' ').replace('-', ' ').split()
-                if len(val_words) == 0:
-                    continue
-
-                # Count how many words in this cell are keywords
-                keyword_count_in_cell = sum(1 for word in val_words if word in header_keywords)
-
-                # Cell is a header cell if MAJORITY of its words are keywords (>50%)
-                # (e.g., "county" = 1/1 ✓, "county/city" = 2/2 ✓, "brevard county" = 1/2 = 50% ✗)
-                if keyword_count_in_cell > len(val_words) * 0.5:
-                    keyword_matches += 1
-
-            # If 3+ cells contain header keywords, it's likely a header row
-            if keyword_matches >= 3:
-                header_rows.append(idx)
-
-        return header_rows
+        return utilities._find_duplicate_headers(df)
 
     def _split_by_duplicate_headers(self, df, sheet_name):
-        """
-        Split a dataframe into multiple sections if duplicate headers are found.
-        Returns a list of tuples: (section_name, section_dataframe)
-        """
-        header_indices = self._find_duplicate_headers(df)
-
-        # If no headers detected, fall back to treating row 0 as the header
-        if len(header_indices) == 0:
-            section_df = df.copy()
-            section_df.columns = [str(col) if pd.notna(col) else "" for col in section_df.iloc[0]]
-            section_df = section_df.iloc[1:].reset_index(drop=True)
-            return [(sheet_name, section_df)]
-        # If exactly one header found, normalize into a single section
-        if len(header_indices) == 1:
-            start_idx = header_indices[0]
-            section_df = df.iloc[start_idx:].copy()
-            section_df.columns = [str(col) if pd.notna(col) else "" for col in section_df.iloc[0]]
-            section_df = section_df.iloc[1:].reset_index(drop=True)
-            if len(section_df) < 1:
-                return []
-            return [(sheet_name, section_df)]
-
-        # Log that we found multiple headers
-        self.logger.info(f"**Found {len(header_indices)} sections in sheet '{sheet_name}'**")
-
-        # Split into sections
-        sections = []
-        for i in range(len(header_indices)):
-            start_idx = header_indices[i]
-            # End is either the next header or the end of the dataframe
-            end_idx = header_indices[i + 1] if i + 1 < len(header_indices) else len(df)
-
-            # Extract this section
-            section_df = df.iloc[start_idx:end_idx].copy()
-
-            # Skip if section is too small (less than 2 rows including header)
-            if len(section_df) < 2:
-                continue
-
-            # Set the first row as column headers and remove it from data
-            # Convert all header values to strings to avoid numeric column names
-            section_df.columns = [str(col) if pd.notna(col) else "" for col in section_df.iloc[0]]
-            section_df = section_df.iloc[1:].reset_index(drop=True)
-
-            # After removing header, check if we still have data
-            if len(section_df) < 1:
-                continue
-
-            # Create a name for this section
-            section_name = f"{sheet_name}_part{i + 1}"
-            sections.append((section_name, section_df))
-
-            self.logger.info(f"  - Section {i + 1}: {len(section_df)} rows (data only)")
-
-        return sections
+        return utilities._split_by_duplicate_headers(df, sheet_name, self.logger)
     
     
     
@@ -949,7 +830,7 @@ class App:
                                     continue
 
                                 # Skip if county/city value is blank or matches header
-                                if pd.isna(value) or str(value).strip() == "" or value == self.column_for["County/City"]:
+                                if utilities.is_blank(value) or value == self.column_for["County/City"]:
                                     continue
 
                                 self.logger.info("Currently on: " + str(value))
@@ -970,7 +851,7 @@ class App:
                                     continue
 
                                 info = (info or "").strip()
-                                if not info or info == "None" or info is None:
+                                if utilities.is_none_response(info):
                                     continue
 
                                 try:
@@ -998,7 +879,7 @@ class App:
                                     state_mapping = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
                                     if self.column_for.get("State"):
                                         _raw_state = df.loc[idx, self.column_for["State"]]
-                                        thisState = str(_raw_state).strip().lower() if not pd.isna(_raw_state) else ""
+                                        thisState = str(_raw_state).strip().lower() if not utilities.is_blank(_raw_state) else ""
                                         if thisState and thisState in state_mapping:
                                             df.loc[idx, self.column_for["State"]] = state_mapping.get(thisState.lower())
                                         elif thisState and thisState[0:2] in state_mapping:
@@ -1073,7 +954,7 @@ class App:
                                                         self.logger.info("email: " + email)
                                                         self.logger.info("score: " + str(score))
                                                         self.logger.info("source: " + source)
-                                                        if (reFind and score >= 90) or (not pd.isna(df.loc[idx, "Email Confidence"]) and str(df.loc[idx, "Email Confidence"]).strip() != "" and score > int(df.loc[idx, "Email Confidence"])) or pd.isna(df.loc[idx, self.column_for["Email"]]) or df.loc[idx, self.column_for["Email"]] == "" or df.loc[idx, self.column_for["Email"]] == 0:
+                                                        if (reFind and score >= 90) or (not utilities.is_blank(df.loc[idx, "Email Confidence"]) and score > int(df.loc[idx, "Email Confidence"])) or utilities._cell_is_empty(df.loc[idx, self.column_for["Email"]]):
                                                             self.logger.info(f"Saving hunter.io email {email} to email column, moving original email to Alternative Email column")
                                                             df.loc[idx, "Alternative Email"] = df.loc[idx, self.column_for["Email"]]
                                                             df.loc[idx, "Alternative Email Confidence"] = df.loc[idx, "Email Confidence"]   
@@ -1081,7 +962,7 @@ class App:
                                                             df.loc[idx, "Email Confidence"] = str(score)
                                                             df.loc[idx, "Hunter Email Source"] = source
                                                             df.loc[idx, self.column_for["LinkedIn"]] = linkedin
-                                                            if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
+                                                            if utilities._cell_is_empty(df.loc[idx, self.column_for["Phone Number"]]) and number != 0 and number is not None:
                                                                 df.loc[idx, self.column_for["Phone Number"]] = number
                                                         elif score>=70:
                                                             self.logger.info(f"Saving hunter.io email {email} to Alternative Email column")
@@ -1089,7 +970,7 @@ class App:
                                                             df.loc[idx, "Alternative Email Confidence"] = str(score)
                                                             df.loc[idx, "Hunter Email Source"] = source
                                                             df.loc[idx, self.column_for["LinkedIn"]] = linkedin
-                                                            if (pd.isna(df.loc[idx, self.column_for["Phone Number"]]) or df.loc[idx, self.column_for["Phone Number"]] == 0) and number != 0 and number is not None:
+                                                            if utilities._cell_is_empty(df.loc[idx, self.column_for["Phone Number"]]) and number != 0 and number is not None:
                                                                 df.loc[idx, self.column_for["Phone Number"]] = number
                                                         else:
                                                             self.logger.info(f"Hunter.io email score less than 70, too low to save ({score}): {email}")

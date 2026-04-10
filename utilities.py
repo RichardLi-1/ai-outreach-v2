@@ -1,4 +1,5 @@
 # utilities.py
+import re
 import pandas as pd
 
 def _detect_columns(df):
@@ -148,3 +149,39 @@ def _split_by_duplicate_headers(df, sheet_name, logger):
         logger.info(f"  - Section {i + 1}: {len(section_df)} rows (data only)")
 
     return sections
+
+def _cell_is_empty(cell):
+    return pd.isna(cell) or cell == 0 or str(cell).strip() == ""
+
+def is_blank(val):
+    """Check if a value is None, NaN, or an empty/whitespace string."""
+    return val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() in ("", "nan", "NaN")
+
+def is_none_response(val):
+    """Check if an API response is empty or the literal string 'None'."""
+    return is_blank(val) or str(val).strip() == "None"
+
+def extract_domain(val):
+    """Extract a bare domain from a URL or domain string."""
+    if is_blank(val):
+        return None
+    s = str(val).strip()
+    s = re.sub(r"^https?://", "", s)
+    s = re.sub(r"^www\.", "", s)
+    s = s.split("/")[0].split("?")[0].split("#")[0]
+    return s if "." in s and " " not in s.strip() else None
+
+def extract_domain_from_text(text):
+    """Extract a bare domain from verbose OpenAI prose (e.g. '...is wake.gov...')."""
+    if not text:
+        return None
+    matches = re.findall(r'\b([a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?)+)\b', text.lower())
+    tlds = {
+        "gov", "com", "org", "net", "edu", "ca", "uk", "au", "us", "info",
+        "io", "co", "mil", "int", "biz", "nz", "de", "fr", "jp", "ch",
+    }
+    for m in matches:
+        parts = m.split(".")
+        if len(parts) >= 2 and parts[-1] in tlds:
+            return m
+    return None

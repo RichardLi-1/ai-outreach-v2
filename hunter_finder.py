@@ -8,6 +8,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import hunter_client
+from utilities import is_blank, extract_domain
 
 
 def open_hunter_finder(root, formatter, apply_theme_fn, TextHandler):
@@ -175,14 +176,7 @@ def open_hunter_finder(root, formatter, apply_theme_fn, TextHandler):
         progress_label.config(text="Starting…")
         threading.Thread(target=lambda: _process(run_id), daemon=True).start()
 
-    def _extract_domain(val):
-        if not val or (isinstance(val, float) and pd.isna(val)):
-            return None
-        s = str(val).strip()
-        s = re.sub(r"^https?://", "", s)
-        s = re.sub(r"^www\.", "", s)
-        s = s.split("/")[0].split("?")[0].split("#")[0]
-        return s if "." in s else None
+    _extract_domain = extract_domain
 
     def _process(run_id):
         try:
