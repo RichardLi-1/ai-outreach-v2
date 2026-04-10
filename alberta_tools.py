@@ -1,5 +1,6 @@
 from langchain_core.tools import tool
-import openai_hunter_client
+import openai_client
+import hunter_client
 from settings import settings
 import logging
 from openai import OpenAI, Timeout

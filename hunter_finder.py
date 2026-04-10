@@ -2,11 +2,12 @@ import threading
 import logging
 import re
 import pandas as pd
-import openai_hunter_client
+import openai_client
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+import hunter_client
 
 
 def open_hunter_finder(root, formatter, apply_theme_fn, TextHandler):
@@ -238,7 +239,7 @@ def open_hunter_finder(root, formatter, apply_theme_fn, TextHandler):
                         win_logger.info(f"Row {idx}: skipping — no organization provided")
                         continue
                     win_logger.info(f"Row {idx}: no domain — asking OpenAI for '{org_raw}'")
-                    domain = openai_hunter_client.find_domain(org_raw)
+                    domain = openai_client.find_domain(org_raw)
                     if not domain:
                         win_logger.info(f"Row {idx}: skipping — could not find domain")
                         continue
@@ -249,10 +250,10 @@ def open_hunter_finder(root, formatter, apply_theme_fn, TextHandler):
                 win_logger.info(f"Row {idx}: {first} {last} @ {domain}")
 
                 try:
-                    res = openai_hunter_client.find_email(first, last, domain)
+                    res = hunter_client.find_email(first, last, domain)
                     attempt = 1
                     while str(res[0]) == "202" and attempt <= 5:
-                        res = openai_hunter_client.find_email(first, last, domain)
+                        res = hunter_client.find_email(first, last, domain)
                         attempt += 1
 
                     if str(res[0]) == "200":

@@ -1,5 +1,6 @@
 import pandas as pd
-import openai_hunter_client
+import openai_client
+import hunter_client
 import utilities
 import json
 from presets import *
@@ -76,7 +77,7 @@ class App:
 
         self.file_path = None
         self.prompt_gis = settings.initial_prompt
-        self.prompt_mayor = settings.initial_prompt_mayor
+        self.prompt_outreach = settings.prompt_find_outreach_message
         self.prompt_assessor = settings.initial_prompt_assessor
         self.output_path = None
         self.cols = []
@@ -93,15 +94,27 @@ class App:
         self.sheet_role_choices = {}
         self._run_active = False
 
+        # Two-pane layout: main content (left) + settings (right)
+        self._pane = ttk.Frame(self.root)
+        self._pane.pack(fill=tk.BOTH, expand=True)
+
+        self._main_frame = ttk.Frame(self._pane)
+        self._main_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Settings panel (right side, starts hidden, built lazily)
+        self._settings_visible = False
+        self._settings_built = False
+        self._settings_frame = ttk.LabelFrame(self._pane, text="Settings", padding=(10, 8))
+
         # Progress bar
-        self.progress = ttk.Progressbar(self.root, orient="horizontal", length=460, mode="determinate")
+        self.progress = ttk.Progressbar(self._main_frame, orient="horizontal", length=460, mode="determinate")
         self.progress.pack(pady=(14, 2), padx=20, fill=tk.X)
-        self.progress_label = ttk.Label(self.root, text="", style="Gray.TLabel")
+        self.progress_label = ttk.Label(self._main_frame, text="", style="Gray.TLabel")
         self.progress_label.pack()
 
         # Welcome message — hidden once a file is selected
         self.welcome_label = ttk.Label(
-            self.root,
+            self._main_frame,
             text="Welcome to AI Outreach.\nGet started by selecting a file.",
             style="Welcome.TLabel", justify=tk.CENTER
         )
@@ -109,25 +122,25 @@ class App:
 
         # Open folder button — shown when processing completes
         self.open_folder_btn = ttk.Button(
-            self.root, text="📁 Open Output Folder",
+            self._main_frame, text="📁 Open Output Folder",
             command=self._open_output_folder,
             style="Accent.TButton", padding=(20, 8)
         )
         # Initially hidden (not packed)
 
         self.cancel_btn = ttk.Button(
-            self.root, text="Cancel",
+            self._main_frame, text="Cancel",
             command=self._cancel_run,
             padding=(20, 4)
         )
         # Initially hidden (not packed)
 
         # Current file label
-        self.current_file_label = ttk.Label(self.root, text="", style="Gray.TLabel")
+        self.current_file_label = ttk.Label(self._main_frame, text="", style="Gray.TLabel")
         self.current_file_label.pack(pady=(4, 0))
 
         # Collapsible log section
-        log_section = ttk.Frame(self.root)
+        log_section = ttk.Frame(self._main_frame)
         log_section.pack(fill=tk.X, padx=10, pady=(6, 0))
         self._log_visible = False
         self._log_toggle_btn = ttk.Button(log_section, text="Logs ▶",
@@ -145,10 +158,9 @@ class App:
 
         self.logger.addHandler(self.text_handler)
 
-        # Controls row: Settings + Select File
-        controls_frame = ttk.Frame(self.root)
+        # Controls row: Select File + Settings toggle
+        controls_frame = ttk.Frame(self._main_frame)
         controls_frame.pack(pady=(14, 6))
-        ttk.Button(controls_frame, text="Settings", width=14, command=self.open_settings).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls_frame, text="Select File", width=14, command=self.select_file, style="Accent.TButton").pack(side=tk.LEFT, padx=8)
 
         more_btn = ttk.Button(controls_frame, text="More Tools ▾", width=14)
@@ -201,8 +213,11 @@ class App:
 
         more_btn.config(command=_show_more_menu)
 
+        ttk.Button(controls_frame, text="Settings ⚙", width=14,
+                   command=self._toggle_settings).pack(side=tk.LEFT, padx=4)
+
         # Output path section
-        output_frame = ttk.LabelFrame(self.root, text="Output", padding=(10, 8))
+        output_frame = ttk.LabelFrame(self._main_frame, text="Output", padding=(10, 8))
         output_frame.pack(padx=20, pady=(4, 14), fill=tk.X)
         ttk.Label(output_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.output_entry = ttk.Entry(output_frame, width=52, state="disabled")
@@ -223,6 +238,207 @@ class App:
             self._output_box.pack(fill=tk.BOTH, expand=True)
             self._log_toggle_btn.config(text="Logs ▼")
             self._log_visible = True
+
+    def _toggle_settings(self):
+        if self._settings_visible:
+            self._settings_frame.pack_forget()
+            self._settings_visible = False
+            # Restore previous width
+            if hasattr(self, '_pre_settings_width'):
+                h = self.root.winfo_height()
+                self.root.geometry(f"{self._pre_settings_width}x{h}")
+        else:
+            # Build settings widgets on first open (lazy init for performance)
+            if not self._settings_built:
+                self._build_settings_panel(self._settings_frame)
+                self._settings_built = True
+            # Remember current width, then expand
+            self._pre_settings_width = self.root.winfo_width()
+            self._settings_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
+            self._settings_visible = True
+            self.root.update_idletasks()
+            needed = self._main_frame.winfo_reqwidth() + self._settings_frame.winfo_reqwidth() + 20
+            h = self.root.winfo_height()
+            w = max(self.root.winfo_width(), needed)
+            self.root.geometry(f"{w}x{h}")
+
+    def _build_settings_panel(self, parent):
+        """Build inline settings content inside the given frame."""
+        # Scrollable canvas for settings content
+        canvas = tk.Canvas(parent, highlightthickness=0, width=320)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Mousewheel scrolling
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+")
+
+        # Row of checkbuttons
+        checks_frame = ttk.Frame(inner)
+        checks_frame.pack(fill=tk.X, pady=(4, 2))
+        ttk.Checkbutton(checks_frame, text="Generate Outreach Message",
+                        variable=self.generate_outreach_message).pack(anchor=tk.W)
+        ttk.Checkbutton(checks_frame, text="Search for Population",
+                        variable=self.search_population).pack(anchor=tk.W)
+
+        # RAG document upload section
+        rag_frame = ttk.LabelFrame(inner, text="Document RAG (Optional)")
+        rag_frame.pack(fill=tk.X, pady=(6, 2))
+        rag_frame.columnconfigure(0, weight=1)
+
+        self._rag_status = ttk.Label(
+            rag_frame,
+            text=f"Vector store: {self.vector_store_id}" if self.vector_store_id else "No documents uploaded"
+        )
+        self._rag_status.grid(row=0, column=0, sticky="w", padx=10, pady=(6, 2))
+
+        rag_btn_frame = ttk.Frame(rag_frame)
+        rag_btn_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(2, 8))
+
+        def upload_documents():
+            paths = filedialog.askopenfilenames(
+                title="Select Documents",
+                filetypes=[("Supported Files", "*.json *.pdf *.txt *.docx"), ("All Files", "*.*")],
+                parent=self.root
+            )
+            if not paths:
+                return
+            self._rag_status.config(text="Uploading...")
+
+            def _upload():
+                try:
+                    self.vector_store_id = openai_client.ingest_documents(list(paths), "Outreach Documents")
+                    self.logger.info(f"Documents uploaded. Vector store ID: {self.vector_store_id}")
+                    def _on_success():
+                        if self._rag_status.winfo_exists():
+                            self._rag_status.config(text=f"Vector store: {self.vector_store_id}")
+                        if self._rag_clear_btn.winfo_exists():
+                            self._rag_clear_btn.config(state="normal")
+                    self.root.after(0, _on_success)
+                except Exception as e:
+                    self.logger.error(f"Document upload failed: {e}")
+                    def _on_fail():
+                        if self._rag_status.winfo_exists():
+                            self._rag_status.config(text="Upload failed")
+                    self.root.after(0, _on_fail)
+
+            threading.Thread(target=_upload, daemon=True).start()
+
+        def clear_vector_store():
+            self.vector_store_id = None
+            self._rag_status.config(text="No documents uploaded")
+            self._rag_clear_btn.config(state="disabled")
+
+        ttk.Button(rag_btn_frame, text="Upload Documents...", command=upload_documents).pack(side=tk.LEFT, padx=(0, 6))
+        self._rag_clear_btn = ttk.Button(rag_btn_frame, text="Clear", command=clear_vector_store,
+                                         state="normal" if self.vector_store_id else "disabled")
+        self._rag_clear_btn.pack(side=tk.LEFT)
+
+        # Prompt editors
+        prompts_frame = ttk.LabelFrame(inner, text="Prompts")
+        prompts_frame.pack(fill=tk.X, pady=(6, 2))
+        prompts_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(prompts_frame, text="GIS prompt").grid(row=0, column=0, sticky="w", padx=10, pady=(6, 2))
+        self._gis_prompt_box = tk.Text(prompts_frame, height=4, wrap=tk.WORD, width=36)
+        self._gis_prompt_box.grid(row=1, column=0, sticky="ew", padx=10)
+        self._gis_prompt_box.insert("1.0", self.prompt_gis)
+
+        ttk.Label(prompts_frame, text="Assessor prompt").grid(row=2, column=0, sticky="w", padx=10, pady=(6, 2))
+        self._assessor_prompt_box = tk.Text(prompts_frame, height=4, wrap=tk.WORD, width=36)
+        self._assessor_prompt_box.grid(row=3, column=0, sticky="ew", padx=10)
+        self._assessor_prompt_box.insert("1.0", self.prompt_assessor)
+
+        ttk.Label(prompts_frame, text="Outreach message prompt").grid(row=4, column=0, sticky="w", padx=10, pady=(6, 2))
+        self._outreach_prompt_box = tk.Text(prompts_frame, height=4, wrap=tk.WORD, width=36)
+        self._outreach_prompt_box.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 8))
+        self._outreach_prompt_box.insert("1.0", self.prompt_outreach)
+
+        # Config buttons row
+        btn_frame = ttk.Frame(inner)
+        btn_frame.pack(pady=(4, 6))
+
+        def load():
+            config_path = filedialog.askopenfilename(
+                title="Select Config File",
+                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+            )
+            if not config_path:
+                return
+            with open(config_path, "r") as file:
+                try:
+                    config = json.load(file)
+                    self.prompt_gis = config.get("prompt_gis", self.prompt_gis)
+                    self.prompt_outreach = config.get("prompt_outreach", self.prompt_outreach)
+                    self.prompt_assessor = config.get("prompt_assessor", self.prompt_assessor)
+
+                    self._gis_prompt_box.delete("1.0", tk.END)
+                    self._gis_prompt_box.insert("1.0", self.prompt_gis)
+                    self._assessor_prompt_box.delete("1.0", tk.END)
+                    self._assessor_prompt_box.insert("1.0", self.prompt_assessor)
+                    self._outreach_prompt_box.delete("1.0", tk.END)
+                    self._outreach_prompt_box.insert("1.0", self.prompt_outreach)
+
+                    self.logger.info(f"Config loaded from {config_path}")
+                except json.JSONDecodeError:
+                    self.logger.error("JSON file is corrupted.")
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    messagebox.showinfo("Unable to load file", "JSON file is corrupted.")
+                except Exception as e:
+                    self.logger.error(f"Unexpected error: {e}")
+
+        def apply_prompts():
+            changed = False
+            if self.prompt_gis != self._gis_prompt_box.get("1.0", tk.END).strip():
+                self.prompt_gis = self._gis_prompt_box.get("1.0", tk.END).strip()
+                self.logger.info("GIS prompt updated")
+                changed = True
+            if self.prompt_assessor != self._assessor_prompt_box.get("1.0", tk.END).strip():
+                self.prompt_assessor = self._assessor_prompt_box.get("1.0", tk.END).strip()
+                self.logger.info("Assessor prompt updated")
+                changed = True
+            if self.prompt_outreach != self._outreach_prompt_box.get("1.0", tk.END).strip():
+                self.prompt_outreach = self._outreach_prompt_box.get("1.0", tk.END).strip()
+                settings.prompt_find_outreach_message = self.prompt_outreach
+                self.logger.info("Outreach message prompt updated")
+                changed = True
+            if not changed:
+                self.logger.info("Prompts unchanged")
+
+        def save_config():
+            config_path = filedialog.asksaveasfilename(
+                title="Save Config File",
+                defaultextension=".json",
+                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+                initialfile="config_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+            )
+            if not config_path:
+                return
+            config = {
+                "prompt_gis": self._gis_prompt_box.get("1.0", tk.END).strip(),
+                "prompt_outreach": self._outreach_prompt_box.get("1.0", tk.END).strip(),
+                "prompt_assessor": self._assessor_prompt_box.get("1.0", tk.END).strip(),
+            }
+            try:
+                with open(config_path, "w") as f:
+                    json.dump(config, f, indent=2)
+                self.logger.info(f"Config saved to {config_path}")
+            except PermissionError:
+                self.logger.error(f"Failed to save config to {config_path}, permission denied.")
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                messagebox.showinfo("Unable to save file", f"Failed to save config to {config_path}")
+
+        ttk.Button(btn_frame, text="Load Config", width=16, command=load).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Save Config", width=16, command=save_config).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Apply Prompts", width=16, command=apply_prompts).pack(side=tk.LEFT, padx=4)
 
     def _apply_theme_to_titlebar(self, window=None):
         """Apply dark/light theme to Windows title bar"""
@@ -270,214 +486,14 @@ class App:
         self.select_output_btn.config(state="normal")
         self.logger.info("Run cancelled by user. Exiting...")
 
-    def open_settings(self):
-        settings_window = tk.Toplevel(self.root)
-        settings_window.title("Settings")
-        settings_window.grab_set()
-        settings_window.minsize(660, 400)
-
-        # Apply theme to settings window title bar
-        if HAS_PYWINSTYLES:
-            self._apply_theme_to_titlebar(settings_window)
-
-        # Scrollable content area fills window; button bar is fixed at bottom
-        settings_window.rowconfigure(0, weight=1)
-        settings_window.columnconfigure(0, weight=1)
-
-        canvas = tk.Canvas(settings_window, borderwidth=0, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(settings_window, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-
-        scroll_frame = ttk.Frame(canvas)
-        scroll_frame.columnconfigure(0, weight=1)
-        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
-        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        settings_window.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
-        
-        ttk.Checkbutton(
-            scroll_frame, text="Generate Outreach Message",
-            variable=self.generate_outreach_message
-        ).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 2))
-
-        ttk.Checkbutton(
-            scroll_frame, text="Search for Population",
-            variable=self.search_population
-        ).grid(row=1, column=0, sticky="w", padx=10, pady=(2, 2))
-
-        # RAG document upload section
-        rag_frame = ttk.LabelFrame(scroll_frame, text="Document RAG (Optional)")
-        rag_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(10, 2))
-
-        ttk.Label(scroll_frame, text="GIS prompt").grid(row=3, column=0, sticky="w", padx=10, pady=(10, 2))
-        gis_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        gis_prompt_box.grid(row=4, column=0, sticky="ew", padx=10)
-        gis_prompt_box.insert("1.0", self.prompt_gis)
-
-        ttk.Label(scroll_frame, text="Assessor prompt").grid(row=5, column=0, sticky="w", padx=10, pady=(10, 2))
-        assessor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        assessor_prompt_box.grid(row=6, column=0, sticky="ew", padx=10)
-        assessor_prompt_box.insert("1.0", self.prompt_assessor)
-
-        ttk.Label(scroll_frame, text="Mayor prompt").grid(row=7, column=0, sticky="w", padx=10, pady=(10, 2))
-        mayor_prompt_box = tk.Text(scroll_frame, height=10, wrap=tk.WORD)
-        mayor_prompt_box.grid(row=8, column=0, sticky="ew", padx=10)
-        mayor_prompt_box.insert("1.0", self.prompt_mayor)
-        rag_frame.columnconfigure(0, weight=1)
-
-        rag_status = ttk.Label(
-            rag_frame,
-            text=f"Vector store: {self.vector_store_id}" if self.vector_store_id else "No documents uploaded"
-        )
-        rag_status.grid(row=0, column=0, sticky="w", padx=10, pady=(6, 2))
-
-        rag_btn_frame = ttk.Frame(rag_frame)
-        rag_btn_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(2, 8))
-
-        def upload_documents():
-            paths = filedialog.askopenfilenames(
-                title="Select Documents",
-                filetypes=[("Supported Files", "*.json *.pdf *.txt *.docx"), ("All Files", "*.*")],
-                parent=settings_window
-            )
-            if not paths:
-                return
-            rag_status.config(text="Uploading...")
-
-            def _upload():
-                try:
-                    self.vector_store_id = openai_hunter_client.ingest_documents(list(paths), "Outreach Documents")
-                    self.logger.info(f"Documents uploaded. Vector store ID: {self.vector_store_id}")
-                    def _on_success():
-                        if rag_status.winfo_exists():
-                            rag_status.config(text=f"Vector store: {self.vector_store_id}")
-                        if clear_btn.winfo_exists():
-                            clear_btn.config(state="normal")
-                    self.root.after(0, _on_success)
-                except Exception as e:
-                    self.logger.error(f"Document upload failed: {e}")
-                    def _on_fail():
-                        if rag_status.winfo_exists():
-                            rag_status.config(text="Upload failed")
-                    self.root.after(0, _on_fail)
-
-            threading.Thread(target=_upload, daemon=True).start()
-
-        def clear_vector_store():
-            self.vector_store_id = None
-            rag_status.config(text="No documents uploaded")
-            clear_btn.config(state="disabled")
-
-        ttk.Button(rag_btn_frame, text="Upload Documents...", command=upload_documents).pack(side=tk.LEFT, padx=(0, 6))
-        clear_btn = ttk.Button(rag_btn_frame, text="Clear", command=clear_vector_store,
-                               state="normal" if self.vector_store_id else "disabled")
-        clear_btn.pack(side=tk.LEFT)
-
-        # Button bar fixed at bottom, outside scroll area
-        btn_frame = ttk.Frame(settings_window)
-        btn_frame.grid(row=1, column=0, columnspan=2, pady=(4, 10))
-
-        def load():
-            config_path = filedialog.askopenfilename(
-                title="Select Config File",
-                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
-            )
-
-            if not config_path:
-                return
-
-            with open(config_path, "r") as file:
-                try:
-                    config = json.load(file)
-                    self.prompt_gis = config.get("prompt_gis", self.prompt_gis)
-                    self.prompt_mayor = config.get("prompt_mayor", self.prompt_mayor)
-                    self.prompt_assessor = config.get("prompt_assessor", self.prompt_assessor)
-
-                    gis_prompt_box.delete("1.0", tk.END)
-                    gis_prompt_box.insert("1.0", self.prompt_gis)
-                    gis_prompt_box.see("1.0")
-                    assessor_prompt_box.delete("1.0", tk.END)
-                    assessor_prompt_box.insert("1.0", self.prompt_assessor)
-                    assessor_prompt_box.see("1.0")
-                    mayor_prompt_box.delete("1.0", tk.END)
-                    mayor_prompt_box.insert("1.0", self.prompt_mayor)
-                    mayor_prompt_box.see("1.0")
-
-                    self.logger.info(f"Config loaded from {config_path}")
-                except json.JSONDecodeError:
-                    self.logger.error("JSON file is corrupted.")
-                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
-                    messagebox.showinfo("Unable to load file", "JSON file is corrupted.", parent=settings_window)
-                except Exception as e:
-                    self.logger.error(f"Unexpected error: {e}")
-        
-        def save():
-            if self.prompt_mayor != mayor_prompt_box.get("1.0", tk.END).strip():
-                self.prompt_mayor = mayor_prompt_box.get("1.0", tk.END).strip()
-                self.logger.info("Mayor prompt temporarily updated to: " + self.prompt_mayor)
-            if self.prompt_assessor != assessor_prompt_box.get("1.0", tk.END).strip():
-                self.prompt_assessor = assessor_prompt_box.get("1.0", tk.END).strip()
-                self.logger.info("Assessor prompt temporarily updated to: " + self.prompt_assessor)
-            if self.prompt_gis != gis_prompt_box.get("1.0", tk.END).strip():
-                self.prompt_gis = gis_prompt_box.get("1.0", tk.END).strip()
-                self.logger.info("GIS prompt temporarily updated to: " + self.prompt_gis)
-            settings_window.destroy()
-        
-        def save_config():
-            config_path = filedialog.asksaveasfilename(
-                title="Save Config File",
-                defaultextension=".json",
-                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
-                initialfile = "config_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-            )
-
-            if not config_path:
-                return
-            config = {
-                "prompt_gis": gis_prompt_box.get("1.0", tk.END).strip(),
-                "prompt_mayor": mayor_prompt_box.get("1.0", tk.END).strip(),
-                "prompt_assessor": assessor_prompt_box.get("1.0", tk.END).strip(),
-            }
-
-            try:
-                with open(config_path, "w") as f:
-                    json.dump(config, f, indent=2)
-                self.logger.info(f"Config saved to {config_path}")
-            except PermissionError:
-                self.logger.error(f"Failed to save config to {config_path}, permission denied.")
-                winsound.MessageBeep(winsound.MB_ICONASTERISK)
-                messagebox.showinfo("Unable to save file", f"Failed to save config to {config_path}", parent=settings_window)
-        
-        def has_unsaved_changes():
-            return (
-                gis_prompt_box.get("1.0", tk.END).strip() != self.prompt_gis or
-                assessor_prompt_box.get("1.0", tk.END).strip() != self.prompt_assessor or
-                mayor_prompt_box.get("1.0", tk.END).strip() != self.prompt_mayor
-            )
-
-        def on_closing():
-            if has_unsaved_changes():
-                result = messagebox.askyesnocancel(
-                    "Unsaved Changes",
-                    "You have unsaved changes. Save before closing?",
-                    parent=settings_window
-                )
-                if result is True:
-                    save()
-                elif result is False:
-                    settings_window.destroy()
-                # None = Cancel, do nothing
-            else:
-                settings_window.destroy()
-
-        settings_window.protocol("WM_DELETE_WINDOW", on_closing)
-
-        ttk.Button(btn_frame, text="Load Config from File", width=20, command=load).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Save Config to File", width=20, command=save_config).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Save and Close", width=20, command=save).pack(side=tk.LEFT, padx=5)
+    def _apply_prompts_from_boxes(self):
+        """Sync prompt text boxes to instance variables (called before runs)."""
+        if not self._settings_built:
+            return
+        self.prompt_gis = self._gis_prompt_box.get("1.0", tk.END).strip()
+        self.prompt_assessor = self._assessor_prompt_box.get("1.0", tk.END).strip()
+        self.prompt_outreach = self._outreach_prompt_box.get("1.0", tk.END).strip()
+        settings.prompt_find_outreach_message = self.prompt_outreach
 
     def select_role_to_search(self, section_name, sheet_name, run_id, state_val="unknown", sections_remaining=0):
         result = threading.Event()
@@ -488,7 +504,7 @@ class App:
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
 
             # Main container with two columns
-            container = ttk.Frame(self.root)
+            container = ttk.Frame(self._main_frame)
             container.pack(pady=5, fill=tk.X)
             self.dynamic_widgets.append(container)
 
@@ -656,7 +672,7 @@ class App:
                 self.select_output_btn.config(state="disabled")
                 result.set()
 
-            btn = ttk.Button(self.root, text="Run", width=20, command=on_run, state="disabled", style="Accent.TButton")
+            btn = ttk.Button(self._main_frame, text="Run", width=20, command=on_run, state="disabled", style="Accent.TButton")
             btn.pack(pady=5)
             self.dynamic_widgets.append(btn)
 
@@ -726,6 +742,8 @@ class App:
                 self.output_entry.insert(0, default_dir)
                 self.output_entry.config(state="readonly")
             run_id = self.current_run_id
+            # Sync prompt edits before starting the run
+            self._apply_prompts_from_boxes()
             # Run main in a separate thread to keep GUI responsive
             self._run_active = True
             self.cancel_btn.pack(pady=(0, 4))
@@ -874,8 +892,6 @@ class App:
                                     "Email Domain",
                                     "Source"]
 
-                    #if self.generate_outreach_message.get():
-                    #    OUTPUT_COLUMNS.append("Contact LinkedIn Outreach Message")
 
                     #Read the data from cols returned by _detect_columns
                     for key in ALL_MAPPED_COLUMNS:
@@ -913,19 +929,11 @@ class App:
                         return  # Cancelled by new file selection or input error
 
                     # Build CSV filename: stateprovince_tag_datetime.csv
-                    tag_map = {1: "NG911", 2: "Mayor", 3: "QQ"}
+                    tag_map = {1: "NG911", 3: "QQ"}
                     out_filename = None
 
                     if userChoices == [0]:
-                        #tag_str = "original"
-                        #out_filename = output_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-                        #if ext == ".csv":
-                        #    df.to_csv(out_filename, index=False)
-                        #else:
-                        #    df.to_excel(out_filename, index=False, engine="openpyxl")
-                        self.logger.info(f"Skipped processing for sheet '{name}'") # - wrote original data to {out_filename.name}")
-                        #stats["files"] += 1
-                        #stats["written_files"].append(out_filename.name)
+                        self.logger.info(f"Skipped processing for sheet '{name}'")
                         continue
 
                     df_original = df.copy()
@@ -1002,25 +1010,26 @@ class App:
                                     self.logger.error(f"Failed to get state for row {idx}: {str(e)}")
                                     continue
                                 
-                                if self.search_population.get():
-                                    #Populate population cell
-                                    populationCell = df.loc[idx, self.column_for["Population"]]
-                                    if pd.isna(populationCell) or populationCell == "" or populationCell == 0:
+                                def cellIsEmpty(cell):
+                                    return pd.isna(cell) or cell == 0 or str(cell).strip() == ""
+
+                                #if the user has selected to search for population and the population cell is empty, attempt to fill it
+                                if self.search_population.get() and cellIsEmpty(df.loc[idx, self.column_for["Population"]]): 
+                                    try:
+                                        population = openai_client.search_misc(
+                                            f"{value} {state}".strip(),
+                                            SearchFor.POPULATION
+                                        )
+                                        self.logger.info(f"Found {value} {state} population:" + str(population))
+                                        population = str(population).replace(",", "").strip()
                                         try:
-                                            population = openai_hunter_client.search_misc(
-                                                f"{value} {state}".strip(),
-                                                SearchFor.POPULATION
-                                            )
-                                            self.logger.info(f"Found {value} {state} population:" + str(population))
-                                            population = population.replace(",", "").strip()
-                                            try:
-                                                int(population) #Check that OpenAI returned a valid number
-                                                df.loc[idx, self.column_for["Population"]] = population
-                                                self.logger.info(f"Saved {value} {state} population:" + str(population))
-                                            except ValueError:
-                                                self.logger.error(f"Failed to parse population for {value} {state} ({population})")
-                                        except openai.APIConnectionError:
-                                            raise
+                                            int(population) #Check that OpenAI returned a valid number
+                                            df.loc[idx, self.column_for["Population"]] = population
+                                            self.logger.info(f"Saved {value} {state} population:" + str(population))
+                                        except ValueError:
+                                            self.logger.error(f"Failed to parse population for {value} {state} ({population})")
+                                    except openai.APIConnectionError:
+                                        raise
                                 
                                 def populateColumn(parsedInfo):
                                     try:
@@ -1065,9 +1074,9 @@ class App:
                                         #Verify personal emails found
                                         if verifyNeeded:
                                             try:
-                                                res = openai_hunter_client.verify_email(email_val)
+                                                res = hunter_client.verify_email(email_val)
                                                 while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
-                                                    res = openai_hunter_client.verify_email(email_val)
+                                                    res = hunter_client.verify_email(email_val)
                                                     attempt_count += 1
                                                 if str(res[0]) == "200":
                                                     verification_data = res[1].get("data")
@@ -1105,10 +1114,10 @@ class App:
                                         gov_site = parsedInfo.get("govWebsite")
                                         if (not verifyNeeded or reFind) and first_name and last_name and first_name.lower() not in ["none", "gis", "tax", "appraiser"] and last_name.lower() not in ["none", "gis", "tax", "team", "appraiser"] and gov_site:
                                             try:
-                                                res = openai_hunter_client.find_email(first_name, last_name, gov_site)
+                                                res = hunter_client.find_email(first_name, last_name, gov_site)
                                                 attempt_count = 1
                                                 while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
-                                                    res = openai_hunter_client.find_email(first_name, last_name, gov_site)
+                                                    res = hunter_client.find_email(first_name, last_name, gov_site)
                                                     attempt_count += 1
                                                 if str(res[0]) == "200":
                                                     parsedHunterResponse = res[1].get("data")
@@ -1157,16 +1166,13 @@ class App:
                                         #Generate LinkedIn Outreach Message
                                         if self.generate_outreach_message.get() and first_name and last_name and parsedInfo.get("role"):
                                             try:
-                                                linkedinOutreachMessage = openai_hunter_client.search_misc(
-                                                    f"{value} {state}".strip(),
-                                                    SearchFor.OUTREACH_MESSAGE,
-                                                    f"{first_name} {last_name}",
-                                                    role,
-                                                    f"{value} {state}"
+                                                linkedinOutreachMessage = openai_client.search_misc(
+                                                    f"{first_name} {last_name}, {parsedInfo['role']}, at {state}".strip(),
+                                                    SearchFor.OUTREACH_MESSAGE
                                                 )
                                                 if linkedinOutreachMessage:
                                                     df.loc[idx, self.column_for["Contact LinkedIn Outreach Message"]] = linkedinOutreachMessage
-                                                    self.logger.info(f"Generated and saved {value} {state} linkedinOutreachMessage:" + str(linkedinOutreachMessage))
+                                                    self.logger.info(f"Generated and saved {parsedInfo['role']} {state} linkedinOutreachMessage:" + str(linkedinOutreachMessage))
                                             except openai.APIConnectionError:
                                                 raise
 
@@ -1184,7 +1190,7 @@ class App:
 
                                 if self.vector_store_id:#                                                            ------------------RAG search for person---------------------
                                     try:
-                                        info = openai_hunter_client.query_rag(self.vector_store_id, value, state)
+                                        info = openai_client.query_rag(self.vector_store_id, value, state)
                                     except openai.APIConnectionError:
                                         raise
                                     except Exception as e:
@@ -1208,7 +1214,7 @@ class App:
                                     
 
                                 try:
-                                    info = openai_hunter_client.search(#                                             ------------------OpenAI search for person---------------------
+                                    info = openai_client.search(#                                             ------------------OpenAI search for person---------------------
                                         f"{value} {state} Government".strip(),
                                         role,
                                         system_prompt

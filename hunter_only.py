@@ -1,11 +1,11 @@
-import openai_hunter_client
+import hunter_client
 
 def main():
     while True:
         firstName = input("First Name: ")
         lastName = input("Last Name: ")
         domain = input("Domain: ")
-        res = openai_hunter_client.find_email(firstName, lastName, domain)
+        res = hunter_client.find_email(firstName, lastName, domain)
         if str(res[0]) == "200":
             parsedEmailResponse = res[1].get("data")
             print(parsedEmailResponse)

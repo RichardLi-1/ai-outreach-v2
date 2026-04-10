@@ -1,5 +1,6 @@
 import pandas as pd
-import openai_hunter_client
+import openai_client
+import hunter_client
 import json
 from presets import Role, stateCorrectionMap
 from datetime import datetime
@@ -1013,9 +1014,9 @@ class App:
                                     #Verify personal emails found
                                     if verifyNeeded:
                                         try:
-                                            res = openai_hunter_client.verify_email(email_val)
+                                            res = openai_client.verify_email(email_val)
                                             while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
-                                                res = openai_hunter_client.verify_email(email_val)
+                                                res = openai_client.verify_email(email_val)
                                                 attempt_count += 1
                                             if str(res[0]) == "200":
                                                 verification_data = res[1].get("data")
@@ -1053,10 +1054,10 @@ class App:
                                     gov_site = parsedInfo.get("govWebsite")
                                     if (not verifyNeeded or reFind) and first_name and last_name and first_name.lower() not in ["none", "gis", "tax", "appraiser"] and last_name.lower() not in ["none", "gis", "tax", "team", "appraiser"] and gov_site:
                                         try:
-                                            res = openai_hunter_client.find_email(first_name, last_name, gov_site)
+                                            res = hunter_client.find_email(first_name, last_name, gov_site)
                                             attempt_count = 1
                                             while str(res[0]) == "202" and attempt_count <= 5: #"The email verification is still in progress. To avoid the request running for too long we return HTTP 202 responses."
-                                                res = openai_hunter_client.find_email(first_name, last_name, gov_site)
+                                                res = hunter_client.find_email(first_name, last_name, gov_site)
                                                 attempt_count += 1
                                             if str(res[0]) == "200":
                                                 parsedHunterResponse = res[1].get("data")
