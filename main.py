@@ -162,55 +162,9 @@ class App:
         controls_frame.pack(pady=(14, 6))
         ttk.Button(controls_frame, text="Select File", width=14, command=self.select_file, style="Accent.TButton").pack(side=tk.LEFT, padx=8)
 
-        more_btn = ttk.Button(controls_frame, text="More Tools ▾", width=14)
-        more_btn.pack(side=tk.LEFT, padx=4)
-
-        self._more_popup = None
-
-        def _show_more_menu():
-            if self._more_popup and self._more_popup.winfo_exists():
-                self._more_popup.destroy()
-                self._more_popup = None
-                return
-
-            popup = tk.Toplevel(self.root)
-            popup.overrideredirect(True)
-            popup.resizable(False, False)
-            sv_ttk.use_dark_theme() if sv_ttk.get_theme() == "dark" else sv_ttk.use_light_theme()
-            self._more_popup = popup
-
-            items = [
-                ("Hunter Finder", self.open_hunter_finder),
-                ("Name Splitter", self.open_name_splitter),
-                ("Merge Files",   self.open_merge_tool),
-            ]
-
-            frame = ttk.Frame(popup, padding=4)
-            frame.pack(fill=tk.BOTH, expand=True)
-
-            def _pick(cmd):
-                popup.destroy()
-                self._more_popup = None
-                cmd()
-
-            for label, cmd in items:
-                ttk.Button(frame, text=label, width=16,
-                           command=lambda c=cmd: _pick(c)).pack(fill=tk.X, pady=2)
-
-            popup.update_idletasks()
-            x = more_btn.winfo_rootx()
-            y = more_btn.winfo_rooty() + more_btn.winfo_height() + 2
-            popup.geometry(f"+{x}+{y}")
-
-            def _on_focusout(e):
-                if self._more_popup and self._more_popup.winfo_exists():
-                    self._more_popup.destroy()
-                    self._more_popup = None
-
-            popup.bind("<FocusOut>", _on_focusout)
-            popup.focus_set()
-
-        more_btn.config(command=_show_more_menu)
+        # TODO: re-enable More Tools dropdown when ready
+        # more_btn = ttk.Button(controls_frame, text="More Tools ▾", width=14)
+        # more_btn.pack(side=tk.LEFT, padx=4)
 
         ttk.Button(controls_frame, text="Settings ⚙", width=14,
                    command=self._toggle_settings).pack(side=tk.LEFT, padx=4)
@@ -238,11 +192,26 @@ class App:
             self._log_toggle_btn.config(text="Logs ▼")
             self._log_visible = True
 
+    def _resize_to_content(self):
+        """Grow (never shrink) the window so all current content is visible."""
+        self.root.update_idletasks()
+        needed_w = self.root.winfo_reqwidth()
+        needed_h = self.root.winfo_reqheight()
+        # When settings is open, reqheight of the canvas is governed by the window
+        # height itself (fill=Y), not the content — use the inner frame directly.
+        if self._settings_visible and hasattr(self, "_settings_inner"):
+            self._settings_inner.update_idletasks()
+            settings_content_h = self._settings_inner.winfo_reqheight() + 60  # 60 for LabelFrame padding + scrollbar margin
+            needed_h = max(needed_h, settings_content_h)
+        w = max(self.root.winfo_width(), needed_w)
+        h = max(self.root.winfo_height(), needed_h)
+        self.root.geometry(f"{w}x{h}")
+
     def _toggle_settings(self):
         if self._settings_visible:
             self._settings_frame.pack_forget()
             self._settings_visible = False
-            # Let tkinter auto-resize back to fit content
+            # Reset geometry so window shrinks back to fit main content only
             self.root.geometry("")
         else:
             # Build settings widgets on first open (lazy init for performance)
@@ -251,31 +220,61 @@ class App:
                 self._settings_built = True
             self._settings_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
             self._settings_visible = True
-            # Temporarily set width so settings panel fits, then clear to restore auto-resize
-            self.root.update_idletasks()
-            needed = self._main_frame.winfo_reqwidth() + self._settings_frame.winfo_reqwidth() + 20
-            w = max(self.root.winfo_width(), needed)
-            self.root.geometry(f"{w}x{self.root.winfo_height()}")
-            self.root.after(50, lambda: self.root.geometry(""))
+            if hasattr(self, "_settings_canvas"):
+                self._settings_canvas.yview_moveto(0)
+            # Grow to fit after layout has had one pass to measure
+            self.root.after(10, self._resize_to_content)
 
     def _build_settings_panel(self, parent):
         """Build inline settings content inside the given frame."""
-        # Scrollable canvas for settings content
-        canvas = tk.Canvas(parent, highlightthickness=0, width=320)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas)
+        # Close button row (always visible, above the scroll area)
+        header = ttk.Frame(parent)
+        header.pack(fill=tk.X, side=tk.TOP, pady=(0, 2))
+        ttk.Button(header, text="✕", width=2, command=self._toggle_settings).pack(side=tk.RIGHT)
 
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        # Scrollable canvas for settings content
+        scroll_row = ttk.Frame(parent)
+        scroll_row.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(scroll_row, highlightthickness=0, width=320)
+        self._settings_canvas = canvas
+        scrollbar = ttk.Scrollbar(scroll_row, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        self._settings_inner = inner
+
         inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(inner_id, width=e.width))
+
+        _resize_after = [None]
+
+        def _update_scrollregion():
+            bbox = canvas.bbox("all")
+            if bbox:
+                canvas.configure(scrollregion=(0, 0, bbox[2], bbox[3]))
+
+        def _on_canvas_resize(_e):
+            if _resize_after[0]:
+                canvas.after_cancel(_resize_after[0])
+            def _apply():
+                canvas.itemconfigure(inner_id, width=canvas.winfo_width())
+                _update_scrollregion()
+            _resize_after[0] = canvas.after(30, _apply)
+
+        canvas.bind("<Configure>", _on_canvas_resize)
+        # No inner.bind — avoids O(n) scrollregion recalcs during every widget reflow;
+        # the canvas <Configure> debounced handler covers all resize-driven updates.
 
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Mousewheel scrolling
+        # Mousewheel scrolling — skip if the event target is a Text widget
+        # (let Text boxes handle their own scrolling), and only scroll when
+        # the content actually overflows the canvas height.
         def _on_mousewheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+            if isinstance(e.widget, tk.Text):
+                return
+            bbox = canvas.bbox("all")
+            if bbox and bbox[3] > canvas.winfo_height():
+                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+")
 
         # Row of checkbuttons
@@ -345,17 +344,17 @@ class App:
         prompts_frame.columnconfigure(0, weight=1)
 
         ttk.Label(prompts_frame, text="GIS prompt").grid(row=0, column=0, sticky="w", padx=10, pady=(6, 2))
-        self._gis_prompt_box = tk.Text(prompts_frame, height=4, wrap=tk.WORD, width=36)
+        self._gis_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=36)
         self._gis_prompt_box.grid(row=1, column=0, sticky="ew", padx=10)
         self._gis_prompt_box.insert("1.0", self.prompt_gis)
 
         ttk.Label(prompts_frame, text="Assessor prompt").grid(row=2, column=0, sticky="w", padx=10, pady=(6, 2))
-        self._assessor_prompt_box = tk.Text(prompts_frame, height=4, wrap=tk.WORD, width=36)
+        self._assessor_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=36)
         self._assessor_prompt_box.grid(row=3, column=0, sticky="ew", padx=10)
         self._assessor_prompt_box.insert("1.0", self.prompt_assessor)
 
         ttk.Label(prompts_frame, text="Outreach message prompt").grid(row=4, column=0, sticky="w", padx=10, pady=(6, 2))
-        self._outreach_prompt_box = tk.Text(prompts_frame, height=4, wrap=tk.WORD, width=36)
+        self._outreach_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=36)
         self._outreach_prompt_box.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 8))
         self._outreach_prompt_box.insert("1.0", self.prompt_outreach)
 
@@ -691,7 +690,9 @@ class App:
             btn.pack(pady=5)
             self.dynamic_widgets.append(btn)
 
-            
+            # Grow window after layout has finished measuring the new widgets
+            self.root.after(10, self._resize_to_content)
+
 
         if run_id == self.current_run_id:
             self.root.after(0, show_dialog)
