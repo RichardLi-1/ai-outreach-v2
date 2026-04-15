@@ -5,9 +5,9 @@ import utilities
 import json
 from presets import *
 from datetime import datetime
-import hunter_finder
-import name_splitter
-import merge
+# import hunter_finder  # Moved to unused-tools/
+# import name_splitter  # Moved to unused-tools/
+# import merge  # Moved to unused-tools/
 import winsound
 import threading
 from settings import settings
@@ -510,6 +510,12 @@ class App:
             self.current_result_event.set()
             self.current_result_event = None
         self.cancel_btn.pack_forget()
+        for w in self.dynamic_widgets:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self.dynamic_widgets.clear()
         self.progress.config(value=0)
         self.progress_label.config(text="Cancelling...", style="Gray.TLabel")
         self.select_output_btn.config(state="normal")
@@ -800,14 +806,14 @@ class App:
         return role_choice_value
 
 
-    def open_hunter_finder(self):
-        hunter_finder.open_hunter_finder(self.root, self.formatter, self._apply_theme_to_titlebar, TextHandler)
-
-    def open_name_splitter(self):
-        name_splitter.open_name_splitter(self.root, self._apply_theme_to_titlebar)
-
-    def open_merge_tool(self):
-        merge.open_merge_tool(self.root, self._apply_theme_to_titlebar)
+    # def open_hunter_finder(self):
+    #     hunter_finder.open_hunter_finder(self.root, self.formatter, self._apply_theme_to_titlebar, TextHandler)
+    #
+    # def open_name_splitter(self):
+    #     name_splitter.open_name_splitter(self.root, self._apply_theme_to_titlebar)
+    #
+    # def open_merge_tool(self):
+    #     merge.open_merge_tool(self.root, self._apply_theme_to_titlebar)
 
     def select_file(self):
         # Warn if a run is in progress
@@ -934,8 +940,6 @@ class App:
         self.root.destroy()
 
     def _restore_defaults(self):
-        self.output_path = None
-        self.log_output_path = None
         self.search_population.set(True)
         self.generate_outreach_message.set(True)
         self.vector_store_id = None
@@ -951,10 +955,19 @@ class App:
         self._outreach_prompt_box.delete("1.0", tk.END)
         self._outreach_prompt_box.insert("1.0", self.prompt_outreach)
 
-        # Clear output path entries
-        self.output_entry.config(state="normal")
-        self.output_entry.delete(0, tk.END)
-        self.output_entry.config(state="disabled")
+        # Reset output path — default to input file's directory if a file is loaded
+        if self.file_path:
+            self.output_path = str(Path(self.file_path).parent)
+            self.output_entry.config(state="normal")
+            self.output_entry.delete(0, tk.END)
+            self.output_entry.insert(0, self.output_path)
+            self.output_entry.config(state="readonly")
+        else:
+            self.output_path = None
+            self.output_entry.config(state="normal")
+            self.output_entry.delete(0, tk.END)
+            self.output_entry.config(state="disabled")
+        self.log_output_path = None
         self._refresh_log_output_entry()
 
         # Clear RAG state

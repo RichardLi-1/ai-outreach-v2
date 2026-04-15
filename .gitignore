@@ -14,3 +14,7 @@ __pycache__/
 build/main/
 *.log
 data.jsonl
+app_state.json
+data.json
+FEATURES_TO_ADD.md
+CLAUDE.md
