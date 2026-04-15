@@ -187,10 +187,15 @@ class App:
             self._output_box.pack_forget()
             self._log_toggle_btn.config(text="Logs ▶")
             self._log_visible = False
+            # Reset minimum and shrink window back to fit remaining content
+            self.root.update_idletasks()
+            self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
+            self.root.geometry("")
         else:
             self._output_box.pack(fill=tk.BOTH, expand=True)
             self._log_toggle_btn.config(text="Logs ▼")
             self._log_visible = True
+            self.root.after(10, self._resize_to_content)
 
     def _resize_to_content(self):
         """Grow (never shrink) the window so all current content is visible."""
@@ -206,12 +211,15 @@ class App:
         w = max(self.root.winfo_width(), needed_w)
         h = max(self.root.winfo_height(), needed_h)
         self.root.geometry(f"{w}x{h}")
+        self.root.minsize(needed_w, needed_h)
 
     def _toggle_settings(self):
         if self._settings_visible:
             self._settings_frame.pack_forget()
             self._settings_visible = False
-            # Reset geometry so window shrinks back to fit main content only
+            # Reset minimum and shrink window back to fit main content only
+            self.root.update_idletasks()
+            self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
             self.root.geometry("")
         else:
             # Build settings widgets on first open (lazy init for performance)
@@ -491,6 +499,35 @@ class App:
         self.prompt_outreach = self._outreach_prompt_box.get("1.0", tk.END).strip()
         settings.prompt_find_outreach_message = self.prompt_outreach
 
+    def flash_taskbar(self, count: int = 5) -> None:
+        """Flash the taskbar button until the window is foregrounded."""
+        import ctypes.wintypes
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize",    ctypes.wintypes.UINT),
+                ("hwnd",      ctypes.wintypes.HWND),
+                ("dwFlags",   ctypes.wintypes.DWORD),
+                ("uCount",    ctypes.wintypes.UINT),
+                ("dwTimeout", ctypes.wintypes.DWORD),
+            ]
+
+        FLASHW_ALL       = 3   # Flash both caption and taskbar button
+        FLASHW_TIMERNOFG = 12  # Keep flashing until window comes to foreground
+
+        # winfo_id() returns the child Tk canvas HWND; walk up to the real
+        # top-level window that owns the taskbar button.
+        child_hwnd = self.root.winfo_id()
+        top_hwnd   = ctypes.windll.user32.GetParent(child_hwnd) or child_hwnd
+
+        fwi           = FLASHWINFO()
+        fwi.cbSize    = ctypes.sizeof(FLASHWINFO)
+        fwi.hwnd      = top_hwnd
+        fwi.dwFlags   = FLASHW_ALL | FLASHW_TIMERNOFG
+        fwi.uCount    = count
+        fwi.dwTimeout = 0
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(fwi))
+
     def select_role_to_search(self, section_name, sheet_name, run_id, state_val="unknown", sections_remaining=0, section_names=None, section_states=None):
         result = threading.Event()
         self.current_result_event = result
@@ -498,6 +535,7 @@ class App:
 
         def show_dialog():
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            self.flash_taskbar()
 
             # Main container with two columns
             container = ttk.Frame(self._main_frame)
@@ -647,7 +685,7 @@ class App:
             def _on_right_configure(_e):
                 right_canvas.configure(scrollregion=right_canvas.bbox("all"))
                 h = right_frame.winfo_reqheight()
-                right_canvas.configure(height=min(h, 450), width=right_frame.winfo_reqwidth())
+                right_canvas.configure(height=min(h, 400), width=right_frame.winfo_reqwidth())
                 if h > 500:
                     right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
                 else:
@@ -857,6 +895,8 @@ class App:
             tag_str = ""
             stats = {"rows": 0, "files": 0, "written_files": []}
 
+            TRAILING_COLUMNS = ["Source", "Email Confidence", "Alternative Email", "Alternative Email Confidence", "Hunter Email Source"]
+
             def _write_file(complete = True):
                 #WRITE per role — timestamp at finish time to avoid collisions
                 write_dir = Path(self.output_path) if self.output_path else input_path.parent
@@ -864,10 +904,13 @@ class App:
                     out_filename = write_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
                 else:
                     out_filename = write_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_incomplete{ext}"
+                trailing = set(TRAILING_COLUMNS)
+                ordered_cols = [c for c in df.columns if c not in trailing] + [c for c in TRAILING_COLUMNS if c in df.columns]
+                df_out = df[ordered_cols]
                 if ext == ".csv":
-                    df.to_csv(out_filename, index=False)
+                    df_out.to_csv(out_filename, index=False)
                 else:
-                    df.to_excel(out_filename, index=False, engine="openpyxl")
+                    df_out.to_excel(out_filename, index=False, engine="openpyxl")
                 self.logger.info(f"Successfully wrote '{out_filename.name}'")
                 stats["files"] += 1
                 stats["written_files"].append(out_filename.name)
@@ -921,7 +964,7 @@ class App:
 
                     self.logger.info("Headers found: " + str(cols))
 
-                    ALL_MAPPED_COLUMNS = ["Population", "County/City", "Email", "Phone Number", #These get mapped into the logic and control the column selection dropdowns that appear
+                    ALL_MAPPED_COLUMNS = ["Organization Website", "Population", "County/City", "Email", "Phone Number", #These get mapped into the logic and control the column selection dropdowns that appear
                                 "First Name", "Last Name", "Role/Title", "State",
                                 "LinkedIn", "Tag", "Contact Tag", "Contact State",
                                 "Contact LinkedIn Outreach Message", "Email Domain", "Has GIS Department",
@@ -1105,7 +1148,13 @@ class App:
                                         df.loc[idx, self.column_for["Email"]] = parsedInfo.get("email", "")
                                         df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,+]", "", parsedInfo.get("phoneNumber") or "")
                                         df.loc[idx, self.column_for["Role/Title"]] = parsedInfo.get("role", "")
-                                        df.loc[idx, "Email Domain"] = parsedInfo.get("emailDomain", "")
+                                        emailDomain = parsedInfo.get("emailDomain", None)
+                                        if emailDomain and all(genericDomain not in emailDomain for genericDomain in ["gmail", "outlook", "yahoo", "hotmail"]):
+                                            df.loc[idx, "Email Domain"] = emailDomain
+                                        else:
+                                            df.loc[idx, "Email Domain"] = parsedInfo.get("govWebsite", "")
+                                        if self.column_for.get("Organization Website") and utilities.is_blank(df.loc[idx, self.column_for["Organization Website"]]):
+                                            df.loc[idx, self.column_for["Organization Website"]] = parsedInfo.get("govWebsite", "")
                                         _tag, _contact_tag = self.role_tags.get(userChoice, (None, None))
                                         df.loc[idx, self.column_for["Tag"]] = _tag
                                         df.loc[idx, self.column_for["Contact Tag"]] = _contact_tag

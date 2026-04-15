@@ -25,7 +25,8 @@ def _detect_columns(df):
             "Email Domain": ["emaildomain"],
             "Has GIS Department": ["hasgisdepartment"],
             "Address Data Owner / Department": ["addressdataowner/department", "addressdataowner"],
-            "Source": ["source"]
+            "Source": ["source"],
+            "Organization Website": ["organizationwebsite", "website"]
         }
 
         _COLUMN_MAP = {alias: canonical
