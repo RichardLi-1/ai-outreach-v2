@@ -481,6 +481,7 @@ class App:
             return  # run completed while dialog was open
         self._run_active = False
         self.current_run_id += 1
+        self.stop_flash_taskbar()
         if self.current_result_event:
             self.current_result_event.set()
             self.current_result_event = None
@@ -499,8 +500,7 @@ class App:
         self.prompt_outreach = self._outreach_prompt_box.get("1.0", tk.END).strip()
         settings.prompt_find_outreach_message = self.prompt_outreach
 
-    def flash_taskbar(self, count: int = 5) -> None:
-        """Flash the taskbar button until the window is foregrounded."""
+    def _flashwinfo(self):
         import ctypes.wintypes
 
         class FLASHWINFO(ctypes.Structure):
@@ -512,19 +512,30 @@ class App:
                 ("dwTimeout", ctypes.wintypes.DWORD),
             ]
 
+        child_hwnd = self.root.winfo_id()
+        hwnd = ctypes.windll.user32.GetParent(child_hwnd) or child_hwnd
+        fwi = FLASHWINFO()
+        fwi.cbSize = ctypes.sizeof(FLASHWINFO)
+        fwi.hwnd = hwnd
+        return fwi
+
+    def flash_taskbar(self) -> None:
+        """Flash the taskbar button until the window is foregrounded."""
+        import ctypes
         FLASHW_ALL       = 3   # Flash both caption and taskbar button
         FLASHW_TIMERNOFG = 12  # Keep flashing until window comes to foreground
-
-        # winfo_id() returns the child Tk canvas HWND; walk up to the real
-        # top-level window that owns the taskbar button.
-        child_hwnd = self.root.winfo_id()
-        top_hwnd   = ctypes.windll.user32.GetParent(child_hwnd) or child_hwnd
-
-        fwi           = FLASHWINFO()
-        fwi.cbSize    = ctypes.sizeof(FLASHWINFO)
-        fwi.hwnd      = top_hwnd
+        fwi = self._flashwinfo()
         fwi.dwFlags   = FLASHW_ALL | FLASHW_TIMERNOFG
-        fwi.uCount    = count
+        fwi.uCount    = 0
+        fwi.dwTimeout = 0
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(fwi))
+
+    def stop_flash_taskbar(self) -> None:
+        """Stop any active taskbar flashing."""
+        import ctypes
+        fwi = self._flashwinfo()
+        fwi.dwFlags   = 0  # FLASHW_STOP
+        fwi.uCount    = 0
         fwi.dwTimeout = 0
         ctypes.windll.user32.FlashWindowEx(ctypes.byref(fwi))
 
@@ -745,6 +756,7 @@ class App:
                         pass
                 self.dynamic_widgets.clear()
                 self.select_output_btn.config(state="disabled")
+                self.stop_flash_taskbar()
                 result.set()
 
             btn = ttk.Button(self._main_frame, text="Run", width=20, command=on_run, state="disabled", style="Accent.TButton")
@@ -1182,7 +1194,7 @@ class App:
                                         reFind = False
                                         email_val = parsedInfo.get("email")
                                         email_type = parsedInfo.get("emailType")
-                                        incompleteEmailArtifacts = ["*", "protected", "info@", "contact@", "gis@", "assessor@", "pa@", "ecta@", "administration", "admin@", "office@", "asr@", "team@"]
+                                        incompleteEmailArtifacts = ["*", "protected", "info@", "contact@", "gis@", "gishelp@" "assessor@", "pa@", "ecta@", "administration", "admin@", "office@", "asr@", "team@"]
                                         if email_val and isinstance(email_val, str):
                                             reFind = any([c in email_val.lower() for c in incompleteEmailArtifacts]) or email_val.lower() == "none" or email_type != "person"
                                         verifyNeeded = bool(email_val) and email_type == "person" and email_val != "None" and not reFind
@@ -1243,11 +1255,14 @@ class App:
                                                             sources = parsedHunterResponse.get("sources", [])
                                                             number = parsedHunterResponse.get("phone_number")
                                                             linkedin = parsedHunterResponse.get("linkedin_url")
+                                                            hunter_position = parsedHunterResponse.get("position")
                                                             source = sources[0]["uri"] if sources else ""
                                                             self.logger.info("Data found by hunter.io:")
                                                             self.logger.info("email: " + email)
                                                             self.logger.info("score: " + str(score))
                                                             self.logger.info("source: " + source)
+                                                            if hunter_position and parsedInfo.get("role") and hunter_position.lower() != parsedInfo["role"].lower():
+                                                                self.logger.warning(f"Hunter.io position '{hunter_position}' differs from OpenAI role '{parsedInfo['role']}' for {first_name} {last_name}")
                                                             if (reFind and score >= 90) or (not utilities.is_blank(df.loc[idx, "Email Confidence"]) and score > int(df.loc[idx, "Email Confidence"])) or utilities._cell_is_empty(df.loc[idx, self.column_for["Email"]]):
                                                                 self.logger.info(f"Saving hunter.io email {email} to email column, moving original email to Alternative Email column")
                                                                 df.loc[idx, "Alternative Email"] = df.loc[idx, self.column_for["Email"]]
