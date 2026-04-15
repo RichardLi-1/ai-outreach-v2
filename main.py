@@ -166,7 +166,7 @@ class App:
         # more_btn = ttk.Button(controls_frame, text="More Tools ▾", width=14)
         # more_btn.pack(side=tk.LEFT, padx=4)
 
-        ttk.Button(controls_frame, text="Settings ⚙", width=14,
+        ttk.Button(controls_frame, text="Settings", width=14,
                    command=self._toggle_settings).pack(side=tk.LEFT, padx=4)
 
         # Output path section
@@ -280,9 +280,9 @@ class App:
         # Row of checkbuttons
         checks_frame = ttk.Frame(inner)
         checks_frame.pack(fill=tk.X, pady=(4, 2))
-        ttk.Checkbutton(checks_frame, text="Generate Outreach Message",
+        ttk.Checkbutton(checks_frame, text="Generate outreach message",
                         variable=self.generate_outreach_message).pack(anchor=tk.W)
-        ttk.Checkbutton(checks_frame, text="Search for Population",
+        ttk.Checkbutton(checks_frame, text="Search for population if empty",
                         variable=self.search_population).pack(anchor=tk.W)
 
         # RAG document upload section
@@ -611,7 +611,7 @@ class App:
                 textvariable=sheet_action_label,
                 variable=sheet_action_var
             )
-            if sections_remaining > 0:
+            if sections_remaining > 1:
                 sheet_action_cb.pack(pady=(14, 3), anchor=tk.W)
                 sheet_action_cb.config(state="disabled")
 
@@ -633,10 +633,33 @@ class App:
                     ttk.Label(sec_frame, text=f"{prefix}{display_sn}", font=font, foreground="" if is_current else "gray").pack(anchor=tk.W, padx=(4, 0))
 
             # Right side: column mapping grid
-            right_frame = ttk.Frame(container)
-            right_frame.pack(side=tk.LEFT, padx=10, anchor=tk.N)
-            rightLabel = ttk.Label(right_frame, text=f"Select columns")
-            rightLabel.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=5)
+            right_outer = ttk.Frame(container)
+            right_outer.pack(side=tk.LEFT, padx=10, anchor=tk.N)
+            ttk.Label(right_outer, text="Select columns").pack(anchor=tk.W, pady=(5, 2))
+
+            right_canvas = tk.Canvas(right_outer, highlightthickness=0)
+            right_scrollbar = ttk.Scrollbar(right_outer, orient="vertical", command=right_canvas.yview)
+            right_canvas.configure(yscrollcommand=right_scrollbar.set)
+
+            right_frame = ttk.Frame(right_canvas)
+            right_canvas.create_window((0, 0), window=right_frame, anchor=tk.NW)
+
+            def _on_right_configure(_e):
+                right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+                h = right_frame.winfo_reqheight()
+                right_canvas.configure(height=min(h, 450), width=right_frame.winfo_reqwidth())
+                if h > 500:
+                    right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+                else:
+                    right_scrollbar.pack_forget()
+            right_frame.bind("<Configure>", _on_right_configure)
+
+            def _on_right_mousewheel(event):
+                right_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                return "break"
+            right_canvas.bind("<MouseWheel>", _on_right_mousewheel)
+            right_frame.bind("<MouseWheel>", _on_right_mousewheel)
+            right_canvas.pack(side=tk.LEFT)
 
             mapping_fields = self.column_for
 
@@ -648,7 +671,7 @@ class App:
                 if default_val:
                     entry.set(default_val)
                 entry.config(state="readonly")
-                entry.bind("<MouseWheel>", lambda _: "break")
+                entry.bind("<MouseWheel>", _on_right_mousewheel)
                 entries[lbl_text] = entry
 
             ttk.Label(right_frame, text="Empty columns will be created", foreground="gray", font=("TkDefaultFont", 7)).grid(
@@ -790,6 +813,16 @@ class App:
                     sheets = {"Sheet1": pd.read_csv(self.file_path, header=None)}
                 else:
                     sheets = pd.read_excel(self.file_path, sheet_name=None, header=None)
+            except PermissionError:
+                self.logger.error(f"Permission denied reading file: {self.file_path}")
+                self.root.after(0, lambda: (
+                    messagebox.showerror("File In Use", "The file could not be opened because it is currently in use.\n\nClose the file in Excel (or any other program) and try again."),
+                    self.select_output_btn.config(state="normal"),
+                    self.cancel_btn.pack_forget(),
+                    self.progress.config(value=0),
+                    self.progress_label.config(text="", style="Gray.TLabel")
+                ))
+                return
             except ValueError as e:
                 err = str(e)
                 self.logger.error(f"Could not read file: {err}")
@@ -978,7 +1011,9 @@ class App:
 
                     for userChoice in userChoices:
                         df = df_original.copy()  # fresh copy so roles don't overwrite each other
-                        role = Role(userChoice)
+                        for key in ALL_MAPPED_COLUMNS:  # reset column_for so insert_if_missing works correctly for each role
+                            self.column_for[key] = cols.get(key)
+                        role_to_search = Role(userChoice)
                         _role_tag = self.role_tags.get(userChoice)
                         tag_str = (_role_tag[0] if _role_tag else None) or tag_map.get(userChoice, "data")
                         # out_filename is set at write time using finish timestamp to avoid collisions
@@ -997,7 +1032,7 @@ class App:
                             insert_if_missing(df, len(df.columns), col)
                             if self.column_for.get(col):
                                 if self.column_for[col] in df.columns:
-                                    if col != "Address Data Owner / Department" or role == Role.GIS:
+                                    if col != "Address Data Owner / Department" or role_to_search == Role.GIS:
                                         df[self.column_for[col]] = ""
 
                         for col in ["Email Confidence", "Alternative Email", "Alternative Email Confidence", "Hunter Email Source"]: #bandaid solution
@@ -1030,7 +1065,7 @@ class App:
                                     value=min(self.progress['value'] + 1, self.progress['maximum'])
                                 ))
 
-                                match role:
+                                match role_to_search:
                                     case Role.GIS:
                                         system_prompt = self.prompt_gis
                                     case Role.ASSESSOR:
@@ -1068,7 +1103,7 @@ class App:
                                         df.loc[idx, self.column_for["First Name"]] = parsedInfo.get("firstName", "")
                                         df.loc[idx, self.column_for["Last Name"]] = parsedInfo.get("lastName", "")
                                         df.loc[idx, self.column_for["Email"]] = parsedInfo.get("email", "")
-                                        df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,+]", "", parsedInfo.get("phoneNumber", ""))
+                                        df.loc[idx, self.column_for["Phone Number"]] = re.sub(r"[\s().,+]", "", parsedInfo.get("phoneNumber") or "")
                                         df.loc[idx, self.column_for["Role/Title"]] = parsedInfo.get("role", "")
                                         df.loc[idx, "Email Domain"] = parsedInfo.get("emailDomain", "")
                                         _tag, _contact_tag = self.role_tags.get(userChoice, (None, None))
@@ -1077,7 +1112,7 @@ class App:
                                         if self.column_for.get("Source"):
                                             df.loc[idx, self.column_for["Source"]] = parsedInfo.get("sourceWebsite", "")
 
-                                        if role == Role.GIS and self.column_for.get("Address Data Owner / Department"):
+                                        if role_to_search == Role.GIS and self.column_for.get("Address Data Owner / Department"):
                                             df.loc[idx, self.column_for["Address Data Owner / Department"]] = parsedInfo.get("addressDepartment", "")
 
                                         state_mapping = {item: label for lst, label in stateCorrectionMap.items() for item in lst}
@@ -1098,7 +1133,7 @@ class App:
                                         reFind = False
                                         email_val = parsedInfo.get("email")
                                         email_type = parsedInfo.get("emailType")
-                                        incompleteEmailArtifacts = ["*", "protected", "info@", "contact@", "gis@", "assessor", "pa@", "ecta@", "administration", "admin@", "office@"]
+                                        incompleteEmailArtifacts = ["*", "protected", "info@", "contact@", "gis@", "assessor@", "pa@", "ecta@", "administration", "admin@", "office@", "asr@", "team@"]
                                         if email_val and isinstance(email_val, str):
                                             reFind = any([c in email_val.lower() for c in incompleteEmailArtifacts]) or email_val.lower() == "none" or email_type != "person"
                                         verifyNeeded = bool(email_val) and email_type == "person" and email_val != "None" and not reFind
@@ -1197,13 +1232,19 @@ class App:
                                         #Generate LinkedIn Outreach Message
                                         if self.generate_outreach_message.get() and first_name and last_name and parsedInfo.get("role") and parsedInfo["role"].lower() != "none":
                                             try:
-                                                linkedinOutreachMessage = openai_client.search_misc(
-                                                    f"{first_name} {last_name}, {parsedInfo['role']}, at {state}".strip(),
-                                                    SearchFor.OUTREACH_MESSAGE
-                                                )
-                                                if linkedinOutreachMessage:
-                                                    df.loc[idx, self.column_for["Contact LinkedIn Outreach Message"]] = linkedinOutreachMessage
-                                                    self.logger.info(f"Generated and saved {parsedInfo['role']} {state} linkedinOutreachMessage: " + str(linkedinOutreachMessage))
+                                                prompt = None
+                                                if role_to_search == Role.GIS:
+                                                    prompt = f"{first_name} {last_name}, {parsedInfo['role']}, at {state}. Outreach focus: NG911".strip()
+                                                elif role_to_search == Role.ASSESSOR:
+                                                    prompt = f"{first_name} {last_name}, {parsedInfo['role']}, at {state}. Outreach focus: QQ".strip()
+                                                if prompt:
+                                                    linkedinOutreachMessage = openai_client.search_misc(
+                                                        prompt,
+                                                        SearchFor.OUTREACH_MESSAGE
+                                                    )
+                                                    if linkedinOutreachMessage:
+                                                        df.loc[idx, self.column_for["Contact LinkedIn Outreach Message"]] = linkedinOutreachMessage
+                                                        self.logger.info(f"Generated and saved {parsedInfo['role']} {state} linkedinOutreachMessage: " + str(linkedinOutreachMessage))
                                             except openai.APIConnectionError:
                                                 raise
 
@@ -1247,7 +1288,7 @@ class App:
                                 try:
                                     info = openai_client.search(#                                             ------------------OpenAI search for person---------------------
                                         f"{value} {state} Government".strip(),
-                                        role,
+                                        role_to_search,
                                         system_prompt
                                     )
                                 except openai.APIConnectionError:

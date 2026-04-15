@@ -1,7 +1,7 @@
 import logging
 import requests
 logger = logging.getLogger(__name__)
-import settings
+from settings import settings
 
 
 def find_email(firstName, lastName, domain):

@@ -24,7 +24,8 @@ def _detect_columns(df):
             "Contact LinkedIn Outreach Message": ["contactlinkedinoutreachmessage", "linkedinoutreachmessage", "outreachmessage"],
             "Email Domain": ["emaildomain"],
             "Has GIS Department": ["hasgisdepartment"],
-            "Address Data Owner / Department": ["addressdataowner/department", "addressdataowner"]
+            "Address Data Owner / Department": ["addressdataowner/department", "addressdataowner"],
+            "Source": ["source"]
         }
 
         _COLUMN_MAP = {alias: canonical
@@ -47,7 +48,6 @@ def _detect_columns(df):
             cols["Contact Tag"] = column
         elif "tag" in normalized:
             cols["Tag"] = column
-        
         if column is not None and str(column).strip() != "":
             col_list.append(column)
     return cols, col_list
