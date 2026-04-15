@@ -49,9 +49,12 @@ class TextHandler(logging.Handler):
         
 
 class App:
+    _STATE_FILE = Path(__file__).parent / "app_state.json"
+
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("AI Outreach")
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Apply Sun Valley theme
         sv_ttk.set_theme(darkdetect.theme())
@@ -79,11 +82,14 @@ class App:
         self.prompt_outreach = settings.prompt_find_outreach_message
         self.prompt_assessor = settings.initial_prompt_assessor
         self.output_path = None
+        self.log_output_path = None
         self.cols = []
 
         self.search_population = tk.BooleanVar(value=True)
         self.generate_outreach_message = tk.BooleanVar(value=True)
         self.vector_store_id = None
+
+        self._load_state()  # override defaults with last-saved values
 
         self.column_for = {}
         self.role_tags = {}
@@ -159,7 +165,7 @@ class App:
 
         # Controls row: Select File + Settings toggle
         controls_frame = ttk.Frame(self._main_frame)
-        controls_frame.pack(pady=(14, 6))
+        controls_frame.pack(pady=(14, 14))
         ttk.Button(controls_frame, text="Select File", width=14, command=self.select_file, style="Accent.TButton").pack(side=tk.LEFT, padx=8)
 
         # TODO: re-enable More Tools dropdown when ready
@@ -169,15 +175,9 @@ class App:
         ttk.Button(controls_frame, text="Settings", width=14,
                    command=self._toggle_settings).pack(side=tk.LEFT, padx=4)
 
-        # Output path section
-        output_frame = ttk.LabelFrame(self._main_frame, text="Output", padding=(10, 8))
-        output_frame.pack(padx=20, pady=(4, 14), fill=tk.X)
-        ttk.Label(output_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.output_entry = ttk.Entry(output_frame, width=52, state="disabled")
-        self.output_entry.grid(row=0, column=1, padx=(6, 6), pady=2)
-        self.select_output_btn = ttk.Button(output_frame, text="Browse…",
-                                           command=lambda: self.select_output_folder(self.output_entry))
-        self.select_output_btn.grid(row=0, column=2, pady=2)
+        # Build settings panel eagerly so output_entry/select_output_btn are always available
+        self._build_settings_panel(self._settings_frame)
+        self._settings_built = True
 
 
 
@@ -187,15 +187,28 @@ class App:
             self._output_box.pack_forget()
             self._log_toggle_btn.config(text="Logs ▶")
             self._log_visible = False
-            # Reset minimum and shrink window back to fit remaining content
             self.root.update_idletasks()
-            self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
-            self.root.geometry("")
+            if self._settings_visible:
+                # Don't shrink height — settings panel needs the room; just update minsize
+                self.root.minsize(self.root.winfo_reqwidth(), self._settings_min_height())
+            else:
+                self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
+                self.root.geometry("")
         else:
             self._output_box.pack(fill=tk.BOTH, expand=True)
             self._log_toggle_btn.config(text="Logs ▼")
             self._log_visible = True
             self.root.after(10, self._resize_to_content)
+
+    def _settings_min_height(self):
+        """Minimum window height that keeps the settings panel usable."""
+        if hasattr(self, "_settings_inner"):
+            self._settings_inner.update_idletasks()
+            # Cap at 80 % of the screen so it never exceeds the display
+            screen_h = self.root.winfo_screenheight()
+            content_h = self._settings_inner.winfo_reqheight() + 60  # LabelFrame padding + scrollbar margin
+            return min(content_h, int(screen_h * 0.80))
+        return 400  # sensible fallback before settings content is measured
 
     def _resize_to_content(self):
         """Grow (never shrink) the window so all current content is visible."""
@@ -204,10 +217,8 @@ class App:
         needed_h = self.root.winfo_reqheight()
         # When settings is open, reqheight of the canvas is governed by the window
         # height itself (fill=Y), not the content — use the inner frame directly.
-        if self._settings_visible and hasattr(self, "_settings_inner"):
-            self._settings_inner.update_idletasks()
-            settings_content_h = self._settings_inner.winfo_reqheight() + 60  # 60 for LabelFrame padding + scrollbar margin
-            needed_h = max(needed_h, settings_content_h)
+        if self._settings_visible:
+            needed_h = max(needed_h, self._settings_min_height())
         w = max(self.root.winfo_width(), needed_w)
         h = max(self.root.winfo_height(), needed_h)
         self.root.geometry(f"{w}x{h}")
@@ -217,16 +228,18 @@ class App:
         if self._settings_visible:
             self._settings_frame.pack_forget()
             self._settings_visible = False
+            # Restore main frame to expand so it fills the full window width again
+            self._main_frame.pack_forget()
+            self._main_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             # Reset minimum and shrink window back to fit main content only
             self.root.update_idletasks()
             self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
             self.root.geometry("")
         else:
-            # Build settings widgets on first open (lazy init for performance)
-            if not self._settings_built:
-                self._build_settings_panel(self._settings_frame)
-                self._settings_built = True
-            self._settings_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
+            # Main frame stays fixed; settings panel absorbs any extra width
+            self._main_frame.pack_forget()
+            self._main_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
+            self._settings_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(0, 10), pady=10)
             self._settings_visible = True
             if hasattr(self, "_settings_canvas"):
                 self._settings_canvas.yview_moveto(0)
@@ -243,7 +256,7 @@ class App:
         # Scrollable canvas for settings content
         scroll_row = ttk.Frame(parent)
         scroll_row.pack(fill=tk.BOTH, expand=True)
-        canvas = tk.Canvas(scroll_row, highlightthickness=0, width=320)
+        canvas = tk.Canvas(scroll_row, highlightthickness=0, width=510)
         self._settings_canvas = canvas
         scrollbar = ttk.Scrollbar(scroll_row, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
@@ -292,6 +305,34 @@ class App:
                         variable=self.generate_outreach_message).pack(anchor=tk.W)
         ttk.Checkbutton(checks_frame, text="Search for population if empty",
                         variable=self.search_population).pack(anchor=tk.W)
+
+        # Output folder section
+        output_frame = ttk.LabelFrame(inner, text="Output")
+        output_frame.pack(fill=tk.X, pady=(6, 2))
+        output_frame.columnconfigure(1, weight=1)
+        ttk.Label(output_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, padx=(10, 4), pady=8)
+        self.output_entry = ttk.Entry(output_frame, state="disabled")
+        self.output_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=8)
+        self.select_output_btn = ttk.Button(output_frame, text="Browse…",
+                                            command=lambda: self.select_output_folder(self.output_entry))
+        self.select_output_btn.grid(row=0, column=2, padx=(0, 10), pady=8)
+        # Restore current output path if already set
+        if self.output_path:
+            self.output_entry.config(state="normal")
+            self.output_entry.insert(0, self.output_path)
+            self.output_entry.config(state="readonly")
+
+        # Log output folder section
+        log_out_frame = ttk.LabelFrame(inner, text="Log Output")
+        log_out_frame.pack(fill=tk.X, pady=(6, 2))
+        log_out_frame.columnconfigure(1, weight=1)
+        ttk.Label(log_out_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, padx=(10, 4), pady=8)
+        self.log_output_entry = ttk.Entry(log_out_frame, state="disabled")
+        self.log_output_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=8)
+        self.log_output_btn = ttk.Button(log_out_frame, text="Browse…",
+                                         command=self._select_log_output_folder)
+        self.log_output_btn.grid(row=0, column=2, padx=(0, 10), pady=8)
+        self._refresh_log_output_entry()
 
         # RAG document upload section
         rag_frame = ttk.LabelFrame(inner, text="Document RAG (Optional)")
@@ -352,17 +393,17 @@ class App:
         prompts_frame.columnconfigure(0, weight=1)
 
         ttk.Label(prompts_frame, text="GIS prompt").grid(row=0, column=0, sticky="w", padx=10, pady=(6, 2))
-        self._gis_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=36)
+        self._gis_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=42)
         self._gis_prompt_box.grid(row=1, column=0, sticky="ew", padx=10)
         self._gis_prompt_box.insert("1.0", self.prompt_gis)
 
         ttk.Label(prompts_frame, text="Assessor prompt").grid(row=2, column=0, sticky="w", padx=10, pady=(6, 2))
-        self._assessor_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=36)
+        self._assessor_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=42)
         self._assessor_prompt_box.grid(row=3, column=0, sticky="ew", padx=10)
         self._assessor_prompt_box.insert("1.0", self.prompt_assessor)
 
         ttk.Label(prompts_frame, text="Outreach message prompt").grid(row=4, column=0, sticky="w", padx=10, pady=(6, 2))
-        self._outreach_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=36)
+        self._outreach_prompt_box = tk.Text(prompts_frame, height=8, wrap=tk.WORD, width=42)
         self._outreach_prompt_box.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 8))
         self._outreach_prompt_box.insert("1.0", self.prompt_outreach)
 
@@ -399,24 +440,6 @@ class App:
                 except Exception as e:
                     self.logger.error(f"Unexpected error: {e}")
 
-        def apply_prompts():
-            changed = False
-            if self.prompt_gis != self._gis_prompt_box.get("1.0", tk.END).strip():
-                self.prompt_gis = self._gis_prompt_box.get("1.0", tk.END).strip()
-                self.logger.info("GIS prompt updated")
-                changed = True
-            if self.prompt_assessor != self._assessor_prompt_box.get("1.0", tk.END).strip():
-                self.prompt_assessor = self._assessor_prompt_box.get("1.0", tk.END).strip()
-                self.logger.info("Assessor prompt updated")
-                changed = True
-            if self.prompt_outreach != self._outreach_prompt_box.get("1.0", tk.END).strip():
-                self.prompt_outreach = self._outreach_prompt_box.get("1.0", tk.END).strip()
-                settings.prompt_find_outreach_message = self.prompt_outreach
-                self.logger.info("Outreach message prompt updated")
-                changed = True
-            if not changed:
-                self.logger.info("Prompts unchanged")
-
         def save_config():
             config_path = filedialog.asksaveasfilename(
                 title="Save Config File",
@@ -442,7 +465,8 @@ class App:
 
         ttk.Button(btn_frame, text="Load Config", width=16, command=load).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_frame, text="Save Config", width=16, command=save_config).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="Apply Prompts", width=16, command=apply_prompts).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Restore Defaults", width=16, command=self._restore_defaults).pack(side=tk.LEFT, padx=4)
+
 
     def _apply_theme_to_titlebar(self, window=None):
         """Apply dark/light theme to Windows title bar"""
@@ -849,7 +873,95 @@ class App:
             output.insert(0, folder)
             output.config(state="readonly")
 
+    def _refresh_log_output_entry(self):
+        self.log_output_entry.config(state="normal")
+        self.log_output_entry.delete(0, tk.END)
+        if self.log_output_path:
+            self.log_output_entry.insert(0, self.log_output_path)
+            self.log_output_entry.config(state="readonly")
+        else:
+            self.log_output_entry.insert(0, "Same as output folder")
+            self.log_output_entry.config(state="disabled")
 
+    def _select_log_output_folder(self):
+        folder = filedialog.askdirectory(title="Select Log Output Folder")
+        if folder:
+            self.log_output_path = folder
+            self._refresh_log_output_entry()
+
+
+    def _load_state(self):
+        try:
+            with open(self._STATE_FILE, "r") as f:
+                state = json.load(f)
+            def _valid_path(p):
+                return p if p and Path(p).is_dir() else None
+            self.output_path = _valid_path(state.get("output_path"))
+            self.log_output_path = _valid_path(state.get("log_output_path"))
+            self.search_population.set(state.get("search_population", True))
+            self.generate_outreach_message.set(state.get("generate_outreach_message", True))
+            self.vector_store_id = state.get("vector_store_id") or None
+            self.prompt_gis = state.get("prompt_gis", self.prompt_gis)
+            self.prompt_assessor = state.get("prompt_assessor", self.prompt_assessor)
+            self.prompt_outreach = state.get("prompt_outreach", self.prompt_outreach)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass  # No saved state — keep defaults
+
+    def _save_state(self):
+        # Sync any unsaved prompt box edits before writing
+        if hasattr(self, "_gis_prompt_box"):
+            self.prompt_gis = self._gis_prompt_box.get("1.0", tk.END).strip()
+            self.prompt_assessor = self._assessor_prompt_box.get("1.0", tk.END).strip()
+            self.prompt_outreach = self._outreach_prompt_box.get("1.0", tk.END).strip()
+        state = {
+            "output_path": self.output_path,
+            "log_output_path": self.log_output_path,
+            "search_population": self.search_population.get(),
+            "generate_outreach_message": self.generate_outreach_message.get(),
+            "vector_store_id": self.vector_store_id,
+            "prompt_gis": self.prompt_gis,
+            "prompt_assessor": self.prompt_assessor,
+            "prompt_outreach": self.prompt_outreach,
+        }
+        try:
+            with open(self._STATE_FILE, "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception:
+            pass
+
+    def _on_close(self):
+        self._save_state()
+        self.root.destroy()
+
+    def _restore_defaults(self):
+        self.output_path = None
+        self.log_output_path = None
+        self.search_population.set(True)
+        self.generate_outreach_message.set(True)
+        self.vector_store_id = None
+        self.prompt_gis = settings.initial_prompt
+        self.prompt_assessor = settings.initial_prompt_assessor
+        self.prompt_outreach = settings.prompt_find_outreach_message
+
+        # Update prompt text boxes
+        self._gis_prompt_box.delete("1.0", tk.END)
+        self._gis_prompt_box.insert("1.0", self.prompt_gis)
+        self._assessor_prompt_box.delete("1.0", tk.END)
+        self._assessor_prompt_box.insert("1.0", self.prompt_assessor)
+        self._outreach_prompt_box.delete("1.0", tk.END)
+        self._outreach_prompt_box.insert("1.0", self.prompt_outreach)
+
+        # Clear output path entries
+        self.output_entry.config(state="normal")
+        self.output_entry.delete(0, tk.END)
+        self.output_entry.config(state="disabled")
+        self._refresh_log_output_entry()
+
+        # Clear RAG state
+        self._rag_status.config(text="No documents uploaded")
+        self._rag_clear_btn.config(state="disabled")
+
+        self.logger.info("Settings restored to defaults")
 
     def run(self):
         self.root.mainloop()
@@ -891,8 +1003,9 @@ class App:
             input_path = Path(self.file_path)
             output_dir = Path(self.output_path) if self.output_path else input_path.parent
 
-            # Write log file to output directory
-            log_path = output_dir / f"log_{timestamp}.log"
+            # Write log file — use dedicated log folder if set, else fall back to output dir
+            log_dir = Path(self.log_output_path) if self.log_output_path else output_dir
+            log_path = log_dir / f"log_{timestamp}.log"
             file_handler = logging.FileHandler(log_path)
             file_handler.setFormatter(self.formatter)
             self.logger.addHandler(file_handler)
