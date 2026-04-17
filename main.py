@@ -1043,7 +1043,7 @@ class App:
                 else:
                     out_filename = write_dir / f"{sanitize(state_val)}_{sanitize(tag_str)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_incomplete{ext}"
                 trailing = set(TRAILING_COLUMNS)
-                ordered_cols = [c for c in df.columns if c not in trailing] + [c for c in TRAILING_COLUMNS if c in df.columns]
+                ordered_cols = [c for c in df.columns if c not in trailing] + [c for c in TRAILING_COLUMNS if c in df.columns and df[c].notna().any()]
                 df_out = df[ordered_cols]
                 if ext == ".csv":
                     df_out.to_csv(out_filename, index=False)
@@ -1215,6 +1215,11 @@ class App:
                                 if self.column_for[col] in df.columns:
                                     if col != "Address Data Owner / Department" or role_to_search == Role.GIS:
                                         df[self.column_for[col]] = ""
+
+                        # Ensure Population column exists upfront to prevent pandas from creating duplicate columns during row iteration
+                        insert_if_missing(df, len(df.columns), "Population")
+                        if self.column_for.get("Population") and self.column_for["Population"] in df.columns:
+                            df[self.column_for["Population"]] = ""
 
                         for col in ["Email Confidence", "Alternative Email", "Alternative Email Confidence", "Hunter Email Source"]: #bandaid solution
                             insert_if_missing(df, len(df.columns), col)
